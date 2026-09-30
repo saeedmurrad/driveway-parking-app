@@ -19,7 +19,7 @@ class HostDashboard extends StatelessWidget {
       },
       builder: (context, data, reload) {
         final (sum, all) = data;
-        final live = all.where((b) => ['parked', 'overstay', 'confirmed'].contains(b['status'])).toList()
+        final live = all.where((b) => ['parked', 'overstay', 'confirmed', 'requested'].contains(b['status'])).toList()
           ..sort((a, b) => '${a['booked_start']}'.compareTo('${b['booked_start']}'));
         final past = all.where((b) => b['status'] == 'completed').take(5).toList();
         return RefreshIndicator(
@@ -40,7 +40,7 @@ class HostDashboard extends StatelessWidget {
                 ]);
               }),
               const SizedBox(height: 22),
-              const Text('Active & upcoming', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              const Text('Requests, active & upcoming', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
               const SizedBox(height: 8),
               if (live.isEmpty) const Card(child: Padding(padding: EdgeInsets.all(20), child: Center(child: Text('No upcoming bookings', style: TextStyle(color: Colors.black54)))))
               else for (final b in live) Padding(padding: const EdgeInsets.only(bottom: 8), child: BookingCard(b: b, host: true, onChanged: reload)),

@@ -34,6 +34,16 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           `The host did not respond to booking ${r.reference}. Your card hold was released and you were not charged.`, { ref: ['booking', r.id], client: c, channels: ['push', 'email'] });
       }
     });
+    // Negotiation windows: unanswered offers expire; accepted offers unpaid after 15 minutes expire.
+    await this.db.tx(async (c) => {
+      const { rows } = await c.query(
+        `update offers set status = 'expired'
+         where (status = 'open' and expires_at < now()) or (status = 'accepted' and pay_by < now())
+         returning thread_id, driver_id, sent_by, status, listing_id`);
+      for (const o of rows) {
+        await this.notes.notify(o.driver_id, 'offer_expired', 'Offer expired', 'Your negotiation timed out. You can still book at the listed price.', { ref: ['offer', o.thread_id], client: c, dedupe: true });
+      }
+    });
     await this.reminders();
     // After end + grace: never-parked bookings close as no-shows; parked ones ask the host if the car is still there.
     const grace = await this.settings.getNumber('grace_minutes');

@@ -29,7 +29,7 @@ export class BookingsService {
     });
   }
 
-  async create(driverId: string, dto: { listingId: string; vehicleId?: string; start: string; end: string }) {
+  async create(driverId: string, dto: { listingId: string; vehicleId?: string; start: string; end: string }, override?: { offerId: string; amount: number }) {
     const start = new Date(dto.start);
     const end = new Date(dto.end);
     if (!(end > start)) throw new BadRequestException('End must be after start');
@@ -49,10 +49,15 @@ export class BookingsService {
       if (mins < l.min_stay_minutes) throw new BadRequestException(`Minimum stay is ${l.min_stay_minutes} minutes`);
       if (mins > l.max_stay_minutes) throw new BadRequestException(`Maximum stay is ${Math.round(l.max_stay_minutes / 60)} hours`);
 
-      const price = calculatePrice({
+      let price = calculatePrice({
         start, end, priceHour: Number(l.price_hour),
         priceDay: l.price_day == null ? null : Number(l.price_day), commissionRate: rate,
       });
+      if (override) {
+        // Negotiated price: the commission applies to the final agreed amount.
+        const commission = r2(override.amount * rate);
+        price = { parking: override.amount, extras: 0, total: override.amount, commissionRate: rate, commission, hostEarnings: r2(override.amount - commission) };
+      }
       const blockedEnd = new Date(end.getTime() + l.buffer_minutes * 60_000);
       const reference = 'PS-' + randomBytes(3).toString('hex').toUpperCase();
       try {
@@ -60,11 +65,20 @@ export class BookingsService {
         const { rows } = await c.query(
           `insert into bookings (reference, listing_id, driver_id, host_id, vehicle_id, booked_start, booked_end,
              blocked_end, parking_amount, extras_amount, total_amount, commission_rate, commission_amount,
-             host_earnings, status)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending_payment') returning *`,
+             host_earnings, status, offer_id)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending_payment',$15) returning *`,
           [reference, dto.listingId, driverId, l.host_id, dto.vehicleId ?? null, start, end, blockedEnd,
-           price.parking, price.extras, price.total, price.commissionRate, price.commission, price.hostEarnings]);
+           price.parking, price.extras, price.total, price.commissionRate, price.commission, price.hostEarnings, override?.offerId ?? null]);
         await this.event(c, rows[0].id, 'created', 'driver', driverId);
+        // Someone else's open offers for an overlapping slot can no longer be honoured.
+        const closed = await c.query(
+          `update offers set status = 'expired', decline_reason = 'slot_taken'
+           where listing_id = $1 and status in ('open','accepted') and driver_id <> $4
+             and tstzrange(start_at, end_at) && tstzrange($2, $3) returning driver_id, thread_id`,
+          [dto.listingId, start, end, driverId]);
+        for (const o of closed.rows) {
+          await this.notes.notify(o.driver_id, 'offer_closed', 'Offer closed', 'That time slot was booked by someone else, so your offer was closed.', { ref: ['offer', o.thread_id], client: c });
+        }
         return { booking: rows[0], price };
       } catch (e: any) {
         if (e.code === '23P01') throw new ConflictException('That time slot has just been taken');
@@ -77,7 +91,7 @@ export class BookingsService {
    * Simulated payment. In production this is a Stripe PaymentIntent confirmed client-side;
    * the booking is confirmed only from the Stripe webhook. The ledger writes are identical.
    */
-  async pay(driverId: string, id: string) {
+  async pay(driverId: string, id: string, forceInstant = false) {
     return this.db.tx(async (c) => {
       const cur = (await c.query(
         `select b.*, l.booking_mode, l.title from bookings b join listings l on l.id = b.listing_id
@@ -86,7 +100,7 @@ export class BookingsService {
       const ref: [string, string] = ['booking', id];
       const pi = 'mock_pi_' + randomBytes(6).toString('hex');
 
-      if (cur.booking_mode === 'request') {
+      if (cur.booking_mode === 'request' && !forceInstant) {
         // Card is authorised (held), not charged. The host has a limited time to answer.
         const mins = await this.settings.getNumber('request_response_minutes');
         const respondBy = new Date(Math.min(Date.now() + mins * 60_000, new Date(cur.booked_start).getTime()));

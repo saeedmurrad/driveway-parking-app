@@ -146,8 +146,13 @@ create table offers (
   status text not null default 'open'
     check (status in ('open','accepted','declined','countered','expired','paid')),
   expires_at timestamptz not null,
-  created_at timestamptz not null default now()
+  thread_id uuid not null,            -- first offer's id; groups a negotiation
+  message text,
+  pay_by timestamptz,                 -- set on accept: driver has 15 minutes to pay
+  decline_reason text,
+  created_at timestamp with time zone not null default now()
 );
+create index offers_thread_idx on offers (thread_id, round);
 
 create table bookings (
   id uuid primary key default gen_random_uuid(),

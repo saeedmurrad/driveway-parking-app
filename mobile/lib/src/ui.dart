@@ -50,6 +50,7 @@ const policyText = <String, String>{
 };
 
 ({Color bg, Color fg, String label}) statusStyle(String s) => switch (s) {
+      'requested' => (bg: const Color(0xFFFFF0C9), fg: const Color(0xFF8A5B00), label: 'Awaiting host'),
       'confirmed' => (bg: const Color(0xFFDCEBFF), fg: const Color(0xFF1148B8), label: 'Confirmed'),
       'parked' => (bg: const Color(0xFFD9F5E3), fg: const Color(0xFF136C37), label: 'Parked'),
       'overstay' => (bg: const Color(0xFFFFE3D1), fg: const Color(0xFFB34700), label: 'Overstay'),

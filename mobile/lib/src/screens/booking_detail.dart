@@ -212,22 +212,93 @@ class _BookingDetailState extends State<BookingDetail> {
     ]);
   }
 
+  Widget _banner(IconData icon, String text, Color bg, Color fg) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, color: fg), const SizedBox(width: 10),
+          Expanded(child: Text(text, style: TextStyle(fontWeight: FontWeight.w600, color: fg))),
+        ]),
+      );
+
+  Future<void> _extend(Json b) async {
+    final hours = await showModalBottomSheet<int>(
+      context: context, showDragHandle: true,
+      builder: (c) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text('Extend your stay', style: Theme.of(c).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text('Currently ends ${fmtTime(dt(b['booked_end']))}. Extra time is charged now at the hourly rate, if the space is free.', style: const TextStyle(color: Colors.black54)),
+          const SizedBox(height: 14),
+          for (final h in [1, 2, 4])
+            Padding(padding: const EdgeInsets.only(bottom: 8), child: OutlinedButton(
+              onPressed: () => Navigator.pop(c, h),
+              child: Text('+$h hour${h > 1 ? 's' : ''}  ·  until ${fmtTime(dt(b['booked_end']).add(Duration(hours: h)))}'),
+            )),
+        ]),
+      ),
+    );
+    if (hours == null) return;
+    _act('extend', 'Booking extended', body: {'hours': hours});
+  }
+
   Widget _actions(BuildContext context, Json b, bool isDriver, bool isHost, String status, bool canPark, DateTime start) {
     final children = <Widget>[];
+    final end = dt(b['booked_end']);
+    final now = DateTime.now();
+
+    // Request-to-book
+    if (status == 'requested') {
+      final by = b['respond_by'] == null ? null : dt(b['respond_by']);
+      if (isHost) {
+        children.add(_banner(Icons.how_to_reg_outlined, 'Booking request: accept before ${by == null ? 'the deadline' : fmtTime(by)}. The driver\'s card is on hold and is only charged if you accept.', const Color(0xFFFFF0C9), const Color(0xFF8A5B00)));
+        children.add(FilledButton.icon(icon: const Icon(Icons.check), label: const Text('Accept booking'), onPressed: _busy ? null : () => _act('respond', 'Booking accepted', body: {'accept': true})));
+        children.add(OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.red.shade700), icon: const Icon(Icons.close), label: const Text('Decline'),
+          onPressed: _busy ? null : () => _act('respond', 'Request declined', body: {'accept': false})));
+      } else if (isDriver) {
+        children.add(_banner(Icons.hourglass_top, 'Waiting for the host. Your card is on hold and won\'t be charged unless they accept${by == null ? '' : ' (they have until ${fmtTime(by)})'}.', const Color(0xFFFFF0C9), const Color(0xFF8A5B00)));
+        children.add(OutlinedButton.icon(icon: const Icon(Icons.undo), label: const Text('Withdraw request'), onPressed: _busy ? null : () => _act('cancel', 'Request withdrawn, no charge')));
+      }
+    }
+
+    // Overstay prompts
+    if (isHost && status == 'parked' && b['overstay_check'] == 'asked') {
+      children.add(_banner(Icons.directions_car_outlined, 'This booking has ended. Is the driver\'s car still at your space?', const Color(0xFFFFE3D1), const Color(0xFFB34700)));
+      children.add(Row(children: [
+        Expanded(child: FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF136C37)), onPressed: _busy ? null : () => _act('car-status', 'Thanks, booking closed', body: {'stillThere': false}), child: const Text('The car has gone'))),
+        const SizedBox(width: 8),
+        Expanded(child: FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB34700)), onPressed: _busy ? null : () => _act('car-status', 'Overstay fees now apply', body: {'stillThere': true}), child: const Text('Still there'))),
+      ]));
+    }
+    if (isDriver && status == 'parked' && now.isAfter(end)) {
+      children.add(_banner(Icons.timer_outlined, 'Your booking has ended. Please move your car and tap End Booking, or overstay fees may apply.', const Color(0xFFFFE3D1), const Color(0xFFB34700)));
+    }
+    if (status == 'overstay') {
+      children.add(_banner(Icons.warning_amber_rounded,
+          '${isDriver ? 'You are overstaying' : 'The driver is overstaying'}: ${money(b['overstay_fee_now'])} so far (${b['overstay_hours']}h × 1.5× hourly rate). The fee stops when the driver ends the booking.',
+          const Color(0xFFFFDDDD), const Color(0xFFA11B1B)));
+    }
+
     if (isDriver && status == 'confirmed') {
       children.add(FilledButton.icon(
         icon: const Icon(Icons.local_parking),
         label: Text(canPark ? "I've parked" : "I've parked (from ${fmtTime(start.subtract(const Duration(minutes: 15)))})"),
-        onPressed: canPark && !_busy ? () => _act('parked', 'Timestamp saved — enjoy your stay', body: {}) : null,
+        onPressed: canPark && !_busy ? () => _act('parked', 'Timestamp saved, enjoy your stay', body: {}) : null,
       ));
     }
     if (isDriver && (status == 'parked' || status == 'overstay')) {
       children.add(FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: const Color(0xFF136C37)),
         icon: const Icon(Icons.exit_to_app),
-        label: const Text('End booking (car has left)'),
+        label: Text(status == 'overstay' ? 'End booking and pay overstay fee' : 'End booking (car has left)'),
         onPressed: _busy ? null : () => _act('end', 'Booking ended. Thanks for parking!'),
       ));
+    }
+    if (isDriver && (status == 'confirmed' || status == 'parked') && now.isBefore(end)) {
+      children.add(OutlinedButton.icon(icon: const Icon(Icons.more_time), label: const Text('Extend booking'), onPressed: _busy ? null : () => _extend(b)));
     }
     if ((isDriver || isHost) && status == 'confirmed') {
       children.add(OutlinedButton.icon(
@@ -244,7 +315,7 @@ class _BookingDetailState extends State<BookingDetail> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        for (final c in children) Padding(padding: const EdgeInsets.only(bottom: 8), child: c),
+        for (final c in children) Padding(padding: EdgeInsets.only(bottom: c is Container ? 0 : 8), child: c),
         if (isDriver && status == 'confirmed')
           const Text('Ending early does not give a refund. If you forget to end, the booking auto-ends after a grace period.', style: TextStyle(fontSize: 12, color: Colors.black45)),
       ]),
@@ -268,6 +339,12 @@ class _BookingDetailState extends State<BookingDetail> {
         'auto_ended' => 'Booking auto-ended',
         'cancelled' => 'Booking cancelled',
         'refunded' => 'Refund issued',
+        'requested' => 'Request sent to host',
+        'accepted' => 'Host accepted',
+        'declined' => 'Host declined',
+        'expired' => 'Request expired',
+        'extended' => 'Booking extended',
+        'overstay' => 'Overstay started',
         _ => e,
       };
 }

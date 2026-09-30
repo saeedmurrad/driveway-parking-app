@@ -82,6 +82,7 @@ def reset():
       delete from booking_events where booking_id in (select id from bookings where reference not like 'PS-SEED%');
       delete from reviews where booking_id in (select id from bookings where reference not like 'PS-SEED%');
       delete from bookings where reference not like 'PS-SEED%';
+      delete from offers;
       delete from payouts; delete from availability_blocks;
       delete from availability_rules where listing_id <> '10000000-0000-4000-8000-000000000003';
       update listings set cancellation_policy = 'strict' where id = '10000000-0000-4000-8000-000000000005';
@@ -359,6 +360,75 @@ s, n = call("GET", "/me/notifications", token=D)
 check("mark all read", n["unread"] == 0)
 s, n = call("GET", "/me/notifications", token=H)
 check("host received new-booking notifications", any(i["type"] == "booking_confirmed" for i in n["items"]))
+
+print("Price negotiation")
+o_start = now + timedelta(days=50)
+def offer(tok, listing, start, amount, hours=2, message=None):
+    body = {"listingId": listing, "start": iso(start), "end": iso(start + timedelta(hours=hours)), "amount": amount}
+    if message: body["message"] = message
+    return call("POST", "/offers", body, tok)
+
+s, r = offer(D, ids["camden"], o_start, 3.0)
+check("offer refused on a listing that does not allow offers", s == 400, (s, r))
+s, r = offer(D, ids["kx"], o_start, 3.0)
+check("offer below host minimum is declined automatically", s == 201 and r["autoDeclined"] and r["offer"]["status"] == "declined", (s, r))
+s, r = offer(D, ids["kx"], o_start, 5.0)
+check("offer at or above listed price rejected", s == 400, (s, r))
+s, r = offer(D, ids["kx"], o_start, 4.0, message="call me on 07700 900123")
+check("phone number in message blocked", s == 400 and "safety" in r["message"], (s, r))
+s, r = offer(D, ids["kx"], o_start, 4.0, message="Regular customer, would 4 work?")
+check("valid offer is open", s == 201 and r["offer"]["status"] == "open" and r["offer"]["round"] == 1, (s, r))
+o1 = r["offer"]
+s, mine = call("GET", "/offers", token=H)
+mine_o = [x for x in mine if x["thread_id"] == o1["thread_id"]]
+check("host sees it awaiting their response", mine_o and mine_o[0]["awaiting_me"] and mine_o[0]["role"] == "host", mine_o)
+s, mine_d = call("GET", "/offers", token=D)
+check("driver sees it as waiting (not awaiting them)", [x for x in mine_d if x["thread_id"] == o1["thread_id"]][0]["awaiting_me"] is False)
+s, _ = call("POST", f"/offers/{o1['id']}/respond", {"action": "accept"}, D)
+check("driver cannot answer their own offer", s == 403)
+s, _ = call("GET", f"/offers/{o1['thread_id']}", token=OMAR)
+check("non-participant cannot read the negotiation", s == 404)
+s, r = call("POST", f"/offers/{o1['id']}/respond", {"action": "counter", "amount": 4.5, "message": "4.50 is my best"}, H)
+check("host counters (round 2)", s == 201 and r["current"]["round"] == 2 and float(r["current"]["amount"]) == 4.5, (s, r))
+s, r = call("POST", f"/offers/{r['current']['id']}/respond", {"action": "counter", "amount": 4.2}, D)
+check("driver counters (round 3)", s == 201 and r["current"]["round"] == 3, (s, r))
+s, r = call("POST", f"/offers/{r['current']['id']}/respond", {"action": "counter", "amount": 4.4}, H)
+check("host counters (round 4 = final)", s == 201 and r["current"]["round"] == 4 and r["can_counter"] is False, (s, r))
+s, bad = call("POST", f"/offers/{r['current']['id']}/respond", {"action": "counter", "amount": 4.3}, D)
+check("a 4th counter-offer is refused (max 3)", s == 400 and "3 counter" in bad["message"], (s, bad))
+s, r2 = call("POST", f"/offers/{r['current']['id']}/respond", {"action": "accept"}, D)
+check("driver accepts -> accepted with 15-minute pay window", s == 201 and r2["current"]["status"] == "accepted" and r2["can_pay"], (s, r2))
+check("all steps saved in history", len(r2["steps"]) == 4 and [x["sent_by"] for x in r2["steps"]] == ["driver", "host", "driver", "host"])
+s, bk = call("POST", f"/offers/{r2['current']['id']}/pay", None, D)
+check("paying books at the agreed price (4.40)", s == 201 and bk["status"] == "confirmed" and float(bk["total_amount"]) == 4.4, (s, bk if s != 201 else bk["status"]))
+check("commission applies to the agreed price (20% of 4.40)", float(bk["commission_amount"]) == 0.88 and float(bk["host_earnings"]) == 3.52)
+check("ledger charged 4.40, offer marked paid", ledger(bk["id"]).get("charge") == 4.4 and psql(f"select status from offers where id='{r2['current']['id']}'") == "paid")
+s, _ = call("POST", f"/offers/{r2['current']['id']}/pay", None, D)
+check("cannot pay the same offer twice", s == 400)
+
+# competing offers close when someone books the slot
+c_start = now + timedelta(days=51)
+s, oo = offer(OMAR, ids["kx"], c_start, 4.0)
+check("another driver opens an offer for a slot", s == 201 and oo["offer"]["status"] == "open", (s, oo))
+book(D, ids["kx"], c_start)
+check("booking the slot closes the other open offer", psql(f"select status from offers where id='{oo['offer']['id']}'") == "expired")
+s, n = call("GET", "/me/notifications", token=OMAR)
+check("the other driver is told (offer_closed)", any(i["type"] == "offer_closed" for i in n["items"]))
+
+# accepted but unpaid -> cannot pay after window
+s, o3 = offer(D, ids["euston"], now + timedelta(days=52), 4.5)
+call("POST", f"/offers/{o3['offer']['id']}/respond", {"action": "accept"}, H)
+psql(f"update offers set pay_by = now() - interval '1 minute' where id='{o3['offer']['id']}'")
+s, r = call("POST", f"/offers/{o3['offer']['id']}/pay", None, D)
+check("payment after the 15-minute window is refused", s == 400, (s, r))
+
+# decline and expiry
+s, o4 = offer(D, ids["euston"], now + timedelta(days=53), 4.5)
+s, r = call("POST", f"/offers/{o4['offer']['id']}/respond", {"action": "decline"}, H)
+check("host declines an offer", r["current"]["status"] == "declined")
+s, o5 = offer(D, ids["shoreditch"], now + timedelta(days=54), 3.0)
+psql(f"update offers set expires_at = now() - interval '1 minute' where id='{o5['offer']['id']}'")
+check("open offer expires automatically", wait_for(lambda: psql(f"select status from offers where id='{o5['offer']['id']}'") == "expired", 45))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -64,7 +64,8 @@ class BookingTabs extends StatelessWidget {
       builder: (context, all, reload) {
         List<Json> of(List<String> s) => all.where((b) => s.contains(b['status'])).toList();
         final tabs = <(String, List<Json>)>[
-          ('Upcoming', of(['confirmed'])..sort((a, b) => '${a['booked_start']}'.compareTo('${b['booked_start']}'))),
+          if (host) ('Requests', of(['requested'])),
+          ('Upcoming', of(host ? ['confirmed'] : ['confirmed', 'requested'])..sort((a, b) => '${a['booked_start']}'.compareTo('${b['booked_start']}'))),
           ('Active', of(['parked', 'overstay'])),
           ('Past', of(['completed'])),
           ('Cancelled', of(['cancelled'])),

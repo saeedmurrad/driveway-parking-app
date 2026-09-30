@@ -8,6 +8,7 @@ import { BookingsModule } from './bookings/bookings.module';
 import { AuthModule } from './auth/auth.module';
 import { MeModule } from './me/me.module';
 import { AdminModule } from './admin/admin.module';
+import { OffersModule } from './offers/offers.module';
 import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
@@ -21,6 +22,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     MeModule,
     AdminModule,
     NotificationsModule,
+    OffersModule,
   ],
   controllers: [HealthController],
 })
