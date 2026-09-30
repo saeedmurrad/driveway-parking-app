@@ -61,21 +61,51 @@ cd mobile && flutter run -d chrome --dart-define=API_URL=http://localhost:3000
 
 The login screen has one-tap buttons for Driver, Host and Admin.
 
-## What works (Phase 1 of the spec)
+## What works
 
-- **Driver:** map search (OpenStreetMap) with price pins, filters and sorting, place search,
-  start time and duration, space details with price breakdown, simulated card checkout,
-  address revealed only after payment, I've Parked / End Booking with timestamps,
-  cancel with policy-based refund, ratings, bookings tabs, spending summary, vehicles.
-- **Host:** dashboard with earnings (pending / available / paid out), my spaces with pause/resume,
-  add-a-space form with map pin (goes to admin approval), earnings page with payouts, cancel bookings.
-- **Admin:** overview stats, listing approval queue, all bookings, editable settings
-  (commission %, grace period, dispute window, payout minimum).
-- **Platform:** 20% commission stored per booking, append-only ledger (totals are SUMs),
-  database-level no-double-booking, auto-end and unpaid-booking expiry via a scheduler.
+Everything in the spec's Phase 1 **and Phase 2**, verified by `scripts/e2e.py` (196 checks) plus 22 backend unit tests.
 
-## Not built yet
+- **Accounts:** register with Terms/Privacy acceptance (version + time stored), email + SMS code verification
+  (required before booking or listing), forgot/reset password, suspend/reinstate, block users,
+  UK GDPR data export and account deletion (financial records kept, the rest anonymised).
+- **Driver:** map search (OpenStreetMap) with price pins, thumbnails, walking time, filters (price, instant book,
+  covered, CCTV, EV, gated), sorting, place search; space page with photo gallery and live price breakdown;
+  paid extras (CCTV, EV charging with connector matching, car wash); instant book, **request-to-book**
+  (card held, charged only on host acceptance); **price negotiation** (offer, counter up to 3 rounds, expiry,
+  15-minute pay window, contact-info blocking, closes when the slot is booked); I've Parked with GPS check
+  (warns over ~200 m) and optional photo; End Booking; **extend** a stay; cancel with policy refunds
+  (commission refunded in proportion); overstay fees; in-app chat; report a problem, including the
+  "space occupied" instant refund; receipts; CSV spending statement; rebook in one tap; ratings.
+- **Host:** dashboard with pending / available / frozen / paid-out earnings, listings with photo upload,
+  edit, pause/resume, weekly availability + blocked dates, pricing (hourly + day rate), min/max stay, buffer,
+  booking mode, offers and lowest acceptable price, extras pricing; accept/decline requests, answer
+  "is the car still there?", payouts, monthly CSV statements, driver ratings on requests and offers.
+- **Admin:** stats, listing approval queue (host verification, right-to-let declaration), bookings
+  (refund, force-end), disputes (evidence, chat log, refund / extra-only refund, warn / suspend), users,
+  settings (commission %, grace, dispute window, overstay, response times), extras catalogue, editable
+  Terms / Privacy / FAQs, push announcements, audit log of every admin action.
+- **Platform:** 20% commission stored per booking, append-only money ledger (every total is a SUM), database-level
+  no-double-booking, weekly availability evaluated in UK time, scheduler (auto-end, no-show, request and offer
+  expiry, overstay prompts, reminders), notifications in-app with push/email/SMS channels logged.
 
-Stripe (payment is simulated behind `BookingsService.pay`), phone/SMS verification, push
-notifications, negotiation, extras, in-app chat, disputes, overstay fees, request-to-book,
-availability calendar UI, photo upload.
+## Still simulated or not built
+
+- **Payments are simulated** (`BookingsService.pay`); Stripe Connect test mode is the next step.
+- **Email, SMS and push are not delivered.** They are stored in-app and logged. In `DEMO_MODE=true` the API also
+  returns verification codes so the app can show them.
+- **Not built:** Google / Apple sign-in, ID-document/selfie verification (admin "Verify" toggle instead),
+  weekly/monthly prices, multi-space listings, favourites, promo codes, referrals, live CCTV link,
+  smart pricing, business accounts (spec Phase 3), Apple Pay / Google Pay sheets.
+- **Hosting caveats:** uploaded photos live on the API's disk (use a persistent volume, or R2 / Supabase Storage);
+  the scheduler runs inside the API process; OpenStreetMap tiles and Nominatim are fair-use only;
+  the dispute window is 2 minutes for demos (spec default is 24 hours, editable in Admin).
+- Android and iOS builds compile but have only been exercised on web.
+
+## Tests
+
+```bash
+docker compose up -d --build
+python3 scripts/e2e.py                 # 196 API acceptance checks (resets its own test data)
+cd backend && npx jest                 # unit tests
+cd mobile && flutter analyze && flutter test
+```

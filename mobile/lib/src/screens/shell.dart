@@ -44,7 +44,8 @@ class _ShellState extends State<Shell> {
             (Icons.insights_outlined, Icons.insights, 'Overview', const AdminOverview()),
             (Icons.fact_check_outlined, Icons.fact_check, 'Listings', const AdminListings()),
             (Icons.list_alt_outlined, Icons.list_alt, 'Bookings', const AdminBookings()),
-            (Icons.tune, Icons.tune, 'Settings', const AdminSettings()),
+            (Icons.gavel_outlined, Icons.gavel, 'Disputes', const AdminDisputes()),
+            (Icons.tune, Icons.tune, 'Manage', const AdminManage()),
           ],
       };
 
