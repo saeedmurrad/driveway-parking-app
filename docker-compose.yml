@@ -1,0 +1,38 @@
+# Local dev stack: Postgres+PostGIS (schema + seed auto-loaded) and the NestJS API.
+#   docker compose up --build        start everything
+#   docker compose down -v           stop and wipe the database (re-runs schema + seed)
+services:
+  db:
+    image: imresamu/postgis:16-3.5-bookworm  # multi-arch (official postgis image lacks arm64)
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: parkspace
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Run once, on first start of an empty volume, in filename order.
+      - ./supabase/migrations/0001_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./supabase/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d parkspace"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/parkspace
+      DATABASE_SSL: "false"
+      CORS_ORIGINS: http://localhost:8080,http://localhost:3000
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:

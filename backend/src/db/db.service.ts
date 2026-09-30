@@ -5,7 +5,10 @@ import { Pool, PoolClient, QueryResult } from 'pg';
 export class DbService implements OnModuleDestroy {
   private readonly pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false },
+    ssl:
+      process.env.DATABASE_SSL === 'false' || process.env.DATABASE_URL?.includes('localhost')
+        ? false
+        : { rejectUnauthorized: false },
     max: 5,
   });
 

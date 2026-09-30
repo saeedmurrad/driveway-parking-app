@@ -31,6 +31,17 @@ prevents overlapping bookings at database level; the money ledger (`transactions
 
 ## Run locally
 
+**Easiest: Docker** (Postgres+PostGIS with schema and seed auto-loaded, plus the API on :3000):
+
+```bash
+colima start            # or start Docker Desktop
+docker compose up --build
+curl localhost:3000/health
+docker compose down -v  # stop and wipe the DB (schema + seed reload next start)
+```
+
+**Without Docker:**
+
 ```bash
 # backend
 cd backend && cp .env.example .env   # fill DATABASE_URL
