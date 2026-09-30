@@ -5,35 +5,46 @@ import 'package:http/http.dart' as http;
 /// flutter build web --dart-define=API_URL=https://parkspace-api.onrender.com
 const apiUrl = String.fromEnvironment('API_URL', defaultValue: 'http://localhost:3000');
 
-class Listing {
-  Listing.fromJson(Map<String, dynamic> j)
-      : id = j['id'],
-        title = j['title'],
-        lat = (j['latitude'] as num).toDouble(),
-        lng = (j['longitude'] as num).toDouble(),
-        priceHour = double.parse('${j['price_hour']}'),
-        distanceM = (j['distance_m'] as num?)?.toDouble();
-
-  final String id, title;
-  final double lat, lng, priceHour;
-  final double? distanceM;
+class ApiException implements Exception {
+  ApiException(this.message, this.status);
+  final String message;
+  final int status;
+  @override
+  String toString() => message;
 }
 
+typedef Json = Map<String, dynamic>;
+
 class Api {
-  Future<List<Listing>> search({
-    required double lat,
-    required double lng,
-    required DateTime start,
-    required DateTime end,
-  }) async {
-    final uri = Uri.parse('$apiUrl/listings/search').replace(queryParameters: {
-      'lat': '$lat',
-      'lng': '$lng',
-      'start': start.toUtc().toIso8601String(),
-      'end': end.toUtc().toIso8601String(),
-    });
-    final res = await http.get(uri);
-    if (res.statusCode != 200) throw Exception('Search failed (${res.statusCode})');
-    return (jsonDecode(res.body) as List).map((e) => Listing.fromJson(e)).toList();
+  String? token;
+
+  Future<dynamic> _send(String method, String path, {Map<String, String>? query, Object? body}) async {
+    final uri = Uri.parse('$apiUrl$path').replace(queryParameters: query);
+    final headers = {
+      'content-type': 'application/json',
+      if (token != null) 'authorization': 'Bearer $token',
+    };
+    http.Response res;
+    try {
+      res = switch (method) {
+        'POST' => await http.post(uri, headers: headers, body: jsonEncode(body ?? {})),
+        'PUT' => await http.put(uri, headers: headers, body: jsonEncode(body ?? {})),
+        'PATCH' => await http.patch(uri, headers: headers, body: jsonEncode(body ?? {})),
+        _ => await http.get(uri, headers: headers),
+      };
+    } catch (_) {
+      throw ApiException('Cannot reach the server. Is the API running?', 0);
+    }
+    final data = res.body.isEmpty ? null : jsonDecode(res.body);
+    if (res.statusCode >= 400) {
+      final m = data is Map ? data['message'] : null;
+      throw ApiException(m is List ? m.join('\n') : (m?.toString() ?? 'Something went wrong'), res.statusCode);
+    }
+    return data;
   }
+
+  Future<dynamic> get(String path, {Map<String, String>? query}) => _send('GET', path, query: query);
+  Future<dynamic> post(String path, [Object? body]) => _send('POST', path, body: body);
+  Future<dynamic> put(String path, Object body) => _send('PUT', path, body: body);
+  Future<dynamic> patch(String path, Object body) => _send('PATCH', path, body: body);
 }

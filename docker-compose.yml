@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/parkspace
       DATABASE_SSL: "false"
+      JWT_SECRET: dev-only-secret-change-me
       CORS_ORIGINS: http://localhost:8080,http://localhost:8090,http://localhost:3000
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}

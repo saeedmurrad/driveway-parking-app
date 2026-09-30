@@ -1,27 +1,34 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { IsDateString, IsOptional, IsUUID } from 'class-validator';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { AuthUser } from '../auth/auth.service';
+import { AuthGuard, CurrentUser } from '../auth/auth.guard';
 import { BookingsService } from './bookings.service';
 
 class CreateBookingDto {
   @IsUUID() listingId: string;
-  @IsUUID() driverId: string; // POC: replace with the authenticated user (Supabase JWT)
   @IsOptional() @IsUUID() vehicleId?: string;
   @IsDateString() start: string;
   @IsDateString() end: string;
 }
-
-class ParkedDto {
-  @IsUUID() driverId: string;
-  @IsOptional() latitude?: number;
-  @IsOptional() longitude?: number;
+class GeoDto {
+  @IsOptional() @IsNumber() latitude?: number;
+  @IsOptional() @IsNumber() longitude?: number;
+}
+class ReviewDto {
+  @IsInt() @Min(1) @Max(5) stars: number;
+  @IsOptional() @IsString() comment?: string;
 }
 
 @Controller('bookings')
+@UseGuards(AuthGuard)
 export class BookingsController {
   constructor(private readonly svc: BookingsService) {}
 
-  @Post() create(@Body() dto: CreateBookingDto) { return this.svc.create(dto); }
-  @Get(':id') one(@Param('id') id: string) { return this.svc.get(id); }
-  @Post(':id/parked') parked(@Param('id') id: string, @Body() dto: ParkedDto) { return this.svc.markParked(id, dto); }
-  @Post(':id/end') end(@Param('id') id: string, @Body() dto: ParkedDto) { return this.svc.end(id, dto.driverId); }
+  @Post() create(@CurrentUser() u: AuthUser, @Body() d: CreateBookingDto) { return this.svc.create(u.id, d); }
+  @Get(':id') one(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.detail(u.id, id); }
+  @Post(':id/pay') pay(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.pay(u.id, id); }
+  @Post(':id/parked') parked(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() g: GeoDto) { return this.svc.markParked(u.id, id, g); }
+  @Post(':id/end') end(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.end(u.id, id); }
+  @Post(':id/cancel') cancel(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.cancel(u.id, id); }
+  @Post(':id/review') review(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: ReviewDto) { return this.svc.review(u.id, id, d.stars, d.comment); }
 }

@@ -51,10 +51,31 @@ npm install && npm run start:dev
 cd mobile && flutter run -d chrome --dart-define=API_URL=http://localhost:3000
 ```
 
-## Status
+## Demo accounts (password `demo1234`)
 
-Done: schema, nearby search (PostGIS), price calculator (+tests), booking creation with
-double-booking protection, parked/end transitions, Flutter search screen, CI + deploy pipelines.
+| Role | Email |
+|---|---|
+| Driver | `driver@demo.parkspace.test` |
+| Host | `host@demo.parkspace.test` (also `omar@demo.parkspace.test`) |
+| Admin | `admin@demo.parkspace.test` |
 
-Next: auth (Supabase JWT), Stripe PaymentIntent + webhook, map view, host listing flow,
-auto-end scheduler (`pg_cron`/cron endpoint), cancellations/refunds, admin panel.
+The login screen has one-tap buttons for Driver, Host and Admin.
+
+## What works (Phase 1 of the spec)
+
+- **Driver:** map search (OpenStreetMap) with price pins, filters and sorting, place search,
+  start time and duration, space details with price breakdown, simulated card checkout,
+  address revealed only after payment, I've Parked / End Booking with timestamps,
+  cancel with policy-based refund, ratings, bookings tabs, spending summary, vehicles.
+- **Host:** dashboard with earnings (pending / available / paid out), my spaces with pause/resume,
+  add-a-space form with map pin (goes to admin approval), earnings page with payouts, cancel bookings.
+- **Admin:** overview stats, listing approval queue, all bookings, editable settings
+  (commission %, grace period, dispute window, payout minimum).
+- **Platform:** 20% commission stored per booking, append-only ledger (totals are SUMs),
+  database-level no-double-booking, auto-end and unpaid-booking expiry via a scheduler.
+
+## Not built yet
+
+Stripe (payment is simulated behind `BookingsService.pay`), phone/SMS verification, push
+notifications, negotiation, extras, in-app chat, disputes, overstay fees, request-to-book,
+availability calendar UI, photo upload.

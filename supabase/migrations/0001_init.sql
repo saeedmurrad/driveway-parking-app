@@ -7,11 +7,12 @@ create table settings (
   key text primary key,
   value text not null
 );
+-- dispute_window_minutes: spec default is 1440 (24h); 2 min here so payouts are demoable.
 insert into settings (key, value) values
   ('commission_rate', '0.20'),
   ('buffer_minutes', '15'),
   ('grace_minutes', '15'),
-  ('dispute_window_minutes', '1440'),
+  ('dispute_window_minutes', '2'),
   ('overstay_multiplier', '1.5'),
   ('min_payout_gbp', '10');
 
@@ -24,6 +25,7 @@ create table users (
   photo_url text,
   is_driver boolean not null default true,
   is_host boolean not null default false,
+  is_admin boolean not null default false,
   verification_status text not null default 'pending',
   account_status text not null default 'active',
   rating_as_driver numeric(3,2),
@@ -283,12 +285,16 @@ create or replace function search_listings(
   p_start timestamptz, p_end timestamptz, p_vehicle_size text default 'medium'
 ) returns table (
   id uuid, title text, latitude double precision, longitude double precision,
-  price_hour numeric, price_day numeric, distance_m double precision, rating numeric
+  price_hour numeric, price_day numeric, distance_m double precision, rating numeric,
+  features text[], space_type text, max_vehicle_size text, booking_mode text,
+  cancellation_policy text, host_name text
 ) language sql stable as $$
   select l.id, l.title, l.latitude, l.longitude, l.price_hour, l.price_day,
          st_distance(l.location, st_setsrid(st_makepoint(p_lng, p_lat), 4326)::geography) as distance_m,
-         l.rating
+         l.rating, l.features, l.space_type, l.max_vehicle_size, l.booking_mode,
+         l.cancellation_policy, split_part(u.name, ' ', 1) as host_name
   from listings l
+  join users u on u.id = l.host_id
   where l.status = 'live'
     and st_dwithin(l.location, st_setsrid(st_makepoint(p_lng, p_lat), 4326)::geography, p_radius_m)
     and array_position(array['small','medium','large','van'], p_vehicle_size)
