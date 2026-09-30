@@ -1,7 +1,7 @@
 # ParkSpace — Driveway Parking Marketplace (POC)
 
 Two-sided marketplace: hosts rent out driveways, drivers find, book and prepay. Platform keeps 20%.
-Full requirements: *Driveway Parking App – Developer Specification*.
+Full requirements: [Developer Specification (PDF)](docs/Driveway-Parking-App-Developer-Specification.pdf).
 
 ## Architecture (all free tier)
 
