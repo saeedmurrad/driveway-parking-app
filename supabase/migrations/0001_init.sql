@@ -217,6 +217,7 @@ create table booking_events (
   actor_id uuid,
   latitude double precision,
   longitude double precision,
+  photo_url text,              -- optional photo of the parked car (damage disputes)
   created_at timestamptz not null default now()
 );
 
@@ -362,12 +363,13 @@ create or replace function search_listings(
   id uuid, title text, latitude double precision, longitude double precision,
   price_hour numeric, price_day numeric, distance_m double precision, rating numeric,
   features text[], space_type text, max_vehicle_size text, booking_mode text,
-  cancellation_policy text, host_name text, allow_offers boolean
+  cancellation_policy text, host_name text, allow_offers boolean, photo_url text
 ) language sql stable as $$
   select l.id, l.title, l.latitude, l.longitude, l.price_hour, l.price_day,
          st_distance(l.location, st_setsrid(st_makepoint(p_lng, p_lat), 4326)::geography) as distance_m,
          l.rating, l.features, l.space_type, l.max_vehicle_size, l.booking_mode,
-         l.cancellation_policy, split_part(u.name, ' ', 1) as host_name, l.allow_offers
+         l.cancellation_policy, split_part(u.name, ' ', 1) as host_name, l.allow_offers,
+         (select url from listing_photos p where p.listing_id = l.id order by p.sort_order, p.id limit 1) as photo_url
   from listings l
   join users u on u.id = l.host_id
   where l.status = 'live'

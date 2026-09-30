@@ -670,5 +670,61 @@ check("deleted account is anonymised", psql(f"select name || '|' || account_stat
 s, _ = call("GET", "/me/bookings", token=dtok)
 check("deleted account can no longer use the API", s == 403)
 
+print("Photos, parked check-in, receipts, statements")
+import struct, zlib
+def tiny_png():
+    raw = b"\x00\xff\x00\x00"
+    def ch(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)) + ch(b"IDAT", zlib.compress(raw)) + ch(b"IEND", b"")
+
+def upload(token, data, mime="image/png", name="p.png"):
+    boundary = "----e2e"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {mime}\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(API + "/uploads", data=body, method="POST", headers={"content-type": f"multipart/form-data; boundary={boundary}", "authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+s, up = upload(H, tiny_png())
+check("image upload returns a URL", s == 201 and up["url"].startswith("/uploads/"), (s, up))
+with urllib.request.urlopen(API + up["url"]) as r:
+    check("uploaded image is served with CORS for the web app", r.status == 200 and r.headers.get("Access-Control-Allow-Origin") == "*" and r.headers.get("Content-Type") == "image/png")
+s, bad = upload(H, b"not an image", mime="text/plain", name="x.txt")
+check("non-images are rejected", s == 400, (s, bad))
+s, _ = call("POST", "/uploads", None, None)
+check("uploading requires login", s == 401)
+s, ph = call("POST", f"/listings/{ids['kx']}/photos", {"url": up["url"]}, H)
+check("host attaches a photo to their listing", s == 201)
+s, _ = call("POST", f"/listings/{ids['kx']}/photos", {"url": up["url"]}, OMAR)
+check("another host cannot add photos", s == 404)
+s, _ = call("POST", f"/listings/{ids['kx']}/photos", {"url": "http://evil.example/x.png"}, H)
+check("only uploaded files can be attached", s == 400)
+s, det = call("GET", f"/listings/{ids['kx']}", token=D)
+check("listing detail includes its photos", len(det["photos"]) >= 3)
+call("DELETE", f"/listings/{ids['kx']}/photos/{ph['id']}", None, H)
+s, res = call("GET", f"/listings/search?lat=51.5308&lng=-0.1238&start={iso(now + timedelta(days=95))}&end={iso(now + timedelta(days=95, hours=2))}", token=D)
+check("search results carry a thumbnail", all(x.get("photo_url") for x in res if x["id"] in (ids["kx"], ids["euston"])))
+
+s, pk = book(D, ids["camden"], now + timedelta(minutes=2))
+s, r = call("POST", f"/bookings/{pk['id']}/parked", {"latitude": 51.60, "longitude": -0.30, "photoUrl": up["url"]}, D)
+check("parked far from the space: allowed with a warning", s == 201 and r["status"] == "parked" and r["far_from_space"] is True and r["parked_distance_m"] > 1000, (s, r.get("parked_distance_m") if s == 201 else r))
+check("check-in photo and GPS saved on the event", psql(f"select photo_url is not null and latitude is not null from booking_events where booking_id='{pk['id']}' and event='parked'") == "t")
+s, done = call("POST", f"/bookings/{pk['id']}/end", None, D)
+s, rc = call("GET", f"/bookings/{pk['id']}/receipt", token=D)
+check("driver receipt: lines sum to the amount paid", s == 200 and rc["kind"] == "receipt" and abs(sum(x["amount"] for x in rc["lines"]) - rc["paid"]) < 0.011 and rc["net"] == rc["paid"], rc)
+s, hs = call("GET", f"/bookings/{pk['id']}/receipt", token=H)
+check("host earnings statement: gross - commission = earned", hs["kind"] == "earnings" and abs(hs["gross"] - hs["commission"] - hs["earned"]) < 0.011, hs)
+s, _ = call("GET", f"/bookings/{pk['id']}/receipt", token=OMAR)
+check("receipt is private to the booking's people", s == 404)
+req = urllib.request.Request(API + "/me/statement.csv?role=driver", headers={"authorization": f"Bearer {D}"})
+with urllib.request.urlopen(req) as r:
+    csv_text = r.read().decode()
+    check("driver CSV statement", r.headers.get("Content-Type", "").startswith("text/csv") and csv_text.splitlines()[0].startswith("Reference,Space") and pk["reference"] in csv_text)
+req = urllib.request.Request(API + f"/me/statement.csv?role=host&month={now.strftime('%Y-%m')}", headers={"authorization": f"Bearer {H}"})
+with urllib.request.urlopen(req) as r:
+    check("host monthly CSV statement", "Earnings" in r.read().decode().splitlines()[0])
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

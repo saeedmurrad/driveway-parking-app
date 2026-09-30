@@ -16,6 +16,7 @@ class CreateBookingDto {
 class GeoDto {
   @IsOptional() @IsNumber() latitude?: number;
   @IsOptional() @IsNumber() longitude?: number;
+  @IsOptional() @IsString() photoUrl?: string;
 }
 class RespondDto { @IsBoolean() accept: boolean; }
 class ExtendDto { @IsInt() @Min(1) @Max(24) hours: number; }
@@ -32,6 +33,7 @@ export class BookingsController {
 
   @Post() create(@CurrentUser() u: AuthUser, @Body() d: CreateBookingDto) { return this.svc.create(u.id, d); }
   @Get(':id') one(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.detail(u.id, id); }
+  @Get(':id/receipt') receipt(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.receipt(u.id, id); }
   @Post(':id/pay') pay(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.pay(u.id, id); }
   @Post(':id/parked') parked(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() g: GeoDto) { return this.svc.markParked(u.id, id, g); }
   @Post(':id/end') end(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.end(u.id, id); }

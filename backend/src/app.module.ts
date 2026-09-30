@@ -8,6 +8,7 @@ import { BookingsModule } from './bookings/bookings.module';
 import { AuthModule } from './auth/auth.module';
 import { MeModule } from './me/me.module';
 import { AdminModule } from './admin/admin.module';
+import { UploadsModule } from './uploads/uploads.controller';
 import { AuditModule } from './audit/audit.service';
 import { ChatModule } from './chat/chat.controller';
 import { ContentModule } from './content/content.controller';
@@ -33,6 +34,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ChatModule,
     ContentModule,
     DisputesModule,
+    UploadsModule,
   ],
   controllers: [HealthController],
 })

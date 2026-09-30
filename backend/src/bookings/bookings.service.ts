@@ -262,17 +262,29 @@ export class BookingsService {
     });
   }
 
-  async markParked(userId: string, id: string, geo?: { latitude?: number; longitude?: number }) {
+  async markParked(userId: string, id: string, geo?: { latitude?: number; longitude?: number; photoUrl?: string }) {
     return this.db.tx(async (c) => {
       const { rows } = await c.query(
         `update bookings set status = 'parked', actual_parked_at = now()
          where id = $1 and driver_id = $2 and status = 'confirmed'
-           and now() >= booked_start - interval '15 minutes' and now() <= booked_end returning id`, [id, userId]);
+           and now() >= booked_start - interval '15 minutes' and now() <= booked_end returning id, listing_id`, [id, userId]);
       if (!rows[0]) throw new BadRequestException("You can tap I've Parked from 15 minutes before the start until the end");
-      await this.event(c, id, 'parked', 'driver', userId, geo);
+      await c.query(
+        `insert into booking_events (booking_id, event, actor, actor_id, latitude, longitude, photo_url) values ($1,'parked','driver',$2,$3,$4,$5)`,
+        [id, userId, geo?.latitude ?? null, geo?.longitude ?? null, geo?.photoUrl ?? null]);
+      // The phone's GPS is compared with the space: more than ~200 m away shows a warning but is still allowed.
+      let farM: number | null = null;
+      if (geo?.latitude != null && geo?.longitude != null) {
+        farM = Number((await c.query(
+          `select st_distance(location, st_setsrid(st_makepoint($2, $3), 4326)::geography) as d from listings where id = $1`,
+          [rows[0].listing_id, geo.longitude, geo.latitude])).rows[0].d);
+      }
       const b = (await c.query('select host_id, reference from bookings where id = $1', [id])).rows[0];
       await this.notes.notify(b.host_id, 'parked', 'Car has arrived', `Booking ${b.reference}: the driver has parked.`, { ref: ['booking', id], client: c });
-      return this.detail(userId, id, c);
+      const out = await this.detail(userId, id, c);
+      out.parked_distance_m = farM == null ? null : Math.round(farM);
+      out.far_from_space = farM != null && farM > 200;
+      return out;
     });
   }
 
@@ -425,6 +437,59 @@ export class BookingsService {
        where ${col} = $1 and b.status <> 'pending_payment'
        order by b.booked_start desc limit 200`, [userId]);
     return rows.map((r) => ({ ...r, other_name: String(r.other_name).split(' ')[0] }));
+  }
+
+  /** Receipt for the driver, earnings statement for the host: built from the ledger. */
+  async receipt(userId: string, id: string) {
+    const b = await this.detail(userId, id);
+    const tx = (await this.db.query(
+      `select type, amount, created_at from transactions where booking_id = $1 and (user_id = $2 or (user_id is null and $3)) order by created_at`,
+      [id, userId, b.viewer === 'host'])).rows;
+    const sum = (types: string[]) => r2(tx.filter((t) => types.includes(t.type)).reduce((s, t) => s + Number(t.amount), 0));
+    if (b.viewer === 'driver') {
+      const paid = sum(['charge', 'overstay_fee']);
+      const refunded = sum(['refund']);
+      return {
+        kind: 'receipt', reference: b.reference, title: b.title, host: b.host_name, plate: b.plate, status: b.status,
+        booked_start: b.booked_start, booked_end: b.booked_end, parked_at: b.actual_parked_at, left_at: b.actual_ended_at,
+        lines: [
+          { label: 'Parking', amount: Number(b.parking_amount) },
+          ...b.extras.map((x: any) => ({ label: x.name, amount: Number(x.line_total) })),
+          ...(Number(b.overstay_fee) > 0 ? [{ label: 'Overstay fee', amount: Number(b.overstay_fee) }] : []),
+        ],
+        paid, refunded, net: r2(paid - refunded), payments: tx.map((t) => ({ type: t.type, amount: Number(t.amount), at: t.created_at })),
+      };
+    }
+    const earned = sum(['host_earning']);
+    return {
+      kind: 'earnings', reference: b.reference, title: b.title, driver: b.driver_name, status: b.status,
+      booked_start: b.booked_start, booked_end: b.booked_end,
+      gross: r2(Number(b.total_amount) + Number(b.overstay_fee)), commission_rate: Number(b.commission_rate),
+      commission: sum(['commission']), earned,
+    };
+  }
+
+  /** CSV statement (driver spend or host earnings) for an optional YYYY-MM month. */
+  async statementCsv(userId: string, role: 'driver' | 'host', month?: string) {
+    const col = role === 'driver' ? 'b.driver_id' : 'b.host_id';
+    const from = month ? new Date(`${month}-01T00:00:00Z`) : null;
+    const to = from ? new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1)) : null;
+    const { rows } = await this.db.query(
+      `select b.reference, b.status, l.title, b.booked_start, b.booked_end, b.actual_parked_at, b.actual_ended_at,
+              b.parking_amount, b.extras_amount, b.overstay_fee, b.total_amount, b.commission_rate,
+              coalesce((select sum(amount) from transactions t where t.booking_id = b.id and t.type = 'refund'),0) as refunded,
+              coalesce((select sum(amount) from transactions t where t.booking_id = b.id and t.type = 'host_earning'),0) as earned
+       from bookings b join listings l on l.id = b.listing_id
+       where ${col} = $1 and b.status in ('confirmed','parked','overstay','completed','cancelled')
+         and ($2::timestamptz is null or (b.booked_start >= $2 and b.booked_start < $3)) order by b.booked_start`, [userId, from, to]);
+    const esc = (v: unknown) => { const t = v == null ? '' : v instanceof Date ? v.toISOString() : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const head = role === 'driver'
+      ? ['Reference', 'Space', 'Status', 'Start', 'End', 'Parked at', 'Left at', 'Parking', 'Extras', 'Overstay fee', 'Total charged', 'Refunded', 'Net spend']
+      : ['Reference', 'Space', 'Status', 'Start', 'End', 'Booking total', 'Commission rate', 'Earnings'];
+    const lines = rows.map((r) => (role === 'driver'
+      ? [r.reference, r.title, r.status, r.booked_start, r.booked_end, r.actual_parked_at, r.actual_ended_at, r.parking_amount, r.extras_amount, r.overstay_fee, r.total_amount, r.refunded, r.r2net ?? r2(Number(r.total_amount) + Number(r.overstay_fee) - Number(r.refunded))]
+      : [r.reference, r.title, r.status, r.booked_start, r.booked_end, r.total_amount, r.commission_rate, r.earned]));
+    return [head, ...lines].map((l) => l.map(esc).join(',')).join('\n');
   }
 
   /** Reverses `amount` of a paid booking back to the driver; commission and host earnings shrink in proportion. */

@@ -22,6 +22,12 @@ insert into listings (id, host_id, title, address, postcode, latitude, longitude
 
 update listings set permission_declared_at = now();
 
+-- Demo photos (files are copied into the uploads folder by the API on start-up).
+insert into listing_photos (listing_id, url, sort_order)
+  select ('10000000-0000-4000-8000-00000000000' || n)::uuid, '/uploads/seed-' || n || '.png', 0 from generate_series(1, 8) n;
+insert into listing_photos (listing_id, url, sort_order)
+  select ('10000000-0000-4000-8000-00000000000' || n)::uuid, '/uploads/seed-' || (n % 8 + 1) || '.png', 1 from generate_series(1, 4) n;
+
 -- Feature flags for demos: price negotiation, request-to-book, and office-hours availability.
 update listings set allow_offers = true, min_offer_price = 1.75 where id = '10000000-0000-4000-8000-000000000001';
 update listings set allow_offers = true, min_offer_price = 2.20 where id = '10000000-0000-4000-8000-000000000002';

@@ -126,6 +126,7 @@ export class ListingsController {
       `select r.stars, r.comment, r.created_at, split_part(u.name,' ',1) as name
        from reviews r join users u on u.id = r.from_user_id where r.listing_id = $1 order by r.created_at desc limit 5`, [id])).rows;
     const out: any = { ...rows[0], reviews };
+    out.photos = (await this.db.query('select id, url from listing_photos where listing_id = $1 order by sort_order, id', [id])).rows;
     out.extras = (await this.db.query(
       `select le.id, et.name, et.description, le.price, le.price_unit, le.details, et.ev_only
        from listing_extras le join extra_types et on et.id = le.extra_type_id
@@ -258,6 +259,22 @@ export class ListingsController {
         }
       }
     });
+    return { ok: true };
+  }
+
+  @Post(':id/photos') @UseGuards(AuthGuard)
+  async addPhoto(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body('url') url: string) {
+    await this.owned(u, id);
+    if (!url || !url.startsWith('/uploads/')) throw new BadRequestException('Upload the photo first');
+    const n = Number((await this.db.query('select count(*) as n from listing_photos where listing_id = $1', [id])).rows[0].n);
+    if (n >= 10) throw new BadRequestException('A listing can have up to 10 photos');
+    return (await this.db.query('insert into listing_photos (listing_id, url, sort_order) values ($1,$2,$3) returning id, url', [id, url, n])).rows[0];
+  }
+
+  @Delete(':id/photos/:photoId') @UseGuards(AuthGuard)
+  async removePhoto(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('photoId') photoId: string) {
+    await this.owned(u, id);
+    await this.db.query('delete from listing_photos where id = $1 and listing_id = $2', [photoId, id]);
     return { ok: true };
   }
 }

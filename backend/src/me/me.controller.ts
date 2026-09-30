@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Header, Post, Query, UseGuards } from '@nestjs/common';
 import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, Length, Matches, MinLength } from 'class-validator';
 import { DbService } from '../db/db.service';
 import { AuthService, AuthUser } from '../auth/auth.service';
@@ -115,6 +115,12 @@ export class MeController {
     return { ok: true };
   }
 
+  @Get('statement.csv') @Header('Content-Type', 'text/csv; charset=utf-8')
+  statement(@CurrentUser() u: AuthUser, @Query('role') role: string, @Query('month') month?: string) {
+    if (month && !/^\d{4}-\d{2}$/.test(month)) throw new BadRequestException('month must look like 2026-09');
+    return this.bookings.statementCsv(u.id, role === 'host' ? 'host' : 'driver', month);
+  }
+
   @Get('notifications') notifications(@CurrentUser() u: AuthUser) { return this.notes.list(u.id); }
   @Post('notifications/read') readAll(@CurrentUser() u: AuthUser) { return this.notes.markAllRead(u.id); }
 
@@ -124,7 +130,8 @@ export class MeController {
   @Get('listings') async listings(@CurrentUser() u: AuthUser) {
     return (await this.db.query(
       `select l.*, (select count(*) from bookings b where b.listing_id = l.id and b.status = 'completed')::int as bookings_count,
-              coalesce((select sum(b.host_earnings) from bookings b where b.listing_id = l.id and b.status = 'completed'), 0) as earnings
+              coalesce((select sum(b.host_earnings) from bookings b where b.listing_id = l.id and b.status = 'completed'), 0) as earnings,
+              coalesce((select json_agg(json_build_object('id', p.id, 'url', p.url) order by p.sort_order, p.id) from listing_photos p where p.listing_id = l.id), '[]') as photos
        from listings l where l.host_id = $1 and l.status <> 'removed' order by l.created_at desc`, [u.id])).rows;
   }
 
