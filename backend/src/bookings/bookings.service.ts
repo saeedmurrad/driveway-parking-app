@@ -6,6 +6,7 @@ import { SettingsService } from '../settings/settings.service';
 import { calculatePrice, extraLineTotal } from './pricing';
 import { refundPercent } from './policy';
 import { NotificationsService } from '../notifications/notifications.service';
+import { AuthService } from '../auth/auth.service';
 
 const fmt = (d: Date | string) => new Date(d).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -17,6 +18,7 @@ export class BookingsService {
     private readonly db: DbService,
     private readonly settings: SettingsService,
     private readonly notes: NotificationsService,
+    private readonly auth: AuthService,
   ) {}
 
   /** Resolves the chosen paid extras into priced lines. `vehicleId` (if given) enforces EV-only extras. */
@@ -66,6 +68,7 @@ export class BookingsService {
     const start = new Date(dto.start);
     const end = new Date(dto.end);
     if (!(end > start)) throw new BadRequestException('End must be after start');
+    await this.auth.assertVerified(driverId);
     if (start.getTime() < Date.now() - 10 * 60_000) throw new BadRequestException('Start time is in the past');
     const rate = await this.settings.getNumber('commission_rate');
 
@@ -77,6 +80,8 @@ export class BookingsService {
         [dto.listingId, start, end])).rows[0];
       if (!l) throw new NotFoundException('Listing not available');
       if (l.host_id === driverId) throw new BadRequestException('You cannot book your own space');
+      const blocked = await c.query(`select 1 from user_blocks where (blocker_id = $1 and blocked_id = $2) or (blocker_id = $2 and blocked_id = $1)`, [driverId, l.host_id]);
+      if (blocked.rowCount) throw new ForbiddenException('You cannot book this space');
       if (!l.open) throw new BadRequestException('The host is not offering this space at those times');
       const mins = (end.getTime() - start.getTime()) / 60_000;
       if (mins < l.min_stay_minutes) throw new BadRequestException(`Minimum stay is ${l.min_stay_minutes} minutes`);
@@ -281,7 +286,7 @@ export class BookingsService {
   }
 
   /** Completing a booking posts the commission + host earning to the ledger (plus any overstay fee). */
-  async complete(c: PoolClient, b: any, actor: 'driver' | 'system', actorId: string | null, event: string, atBookedEnd = false) {
+  async complete(c: PoolClient, b: any, actor: 'driver' | 'system' | 'admin', actorId: string | null, event: string, atBookedEnd = false) {
     await c.query(`update bookings set status = 'completed', actual_ended_at = case when $2 then booked_end else now() end where id = $1`, [b.id, atBookedEnd]);
     await c.query(
       `insert into transactions (booking_id, user_id, type, amount) values ($1,null,'commission',$2), ($1,$3,'host_earning',$4)`,
@@ -358,6 +363,9 @@ export class BookingsService {
         [id, userId, to, b.driver_id === userId ? b.listing_id : null, stars, comment ?? null]);
       if (b.driver_id === userId) {
         await c.query(`update listings set rating = (select round(avg(stars)::numeric, 2) from reviews where listing_id = $1) where id = $1`, [b.listing_id]);
+        await c.query(`update users set rating_as_host = (select round(avg(stars)::numeric, 2) from reviews where to_user_id = $1 and listing_id is not null) where id = $1`, [to]);
+      } else {
+        await c.query(`update users set rating_as_driver = (select round(avg(stars)::numeric, 2) from reviews where to_user_id = $1 and listing_id is null) where id = $1`, [to]);
       }
       return { ok: true };
     });
@@ -393,6 +401,9 @@ export class BookingsService {
       b.overstay_fee_now = r2(hours * Number(ph) * mult);
       b.overstay_hours = hours;
     }
+    b.disputes = (await q(
+      `select id, type, status, resolution, refund_amount, created_at from disputes where booking_id = $1 order by created_at desc`, [id])).rows;
+    b.driver_rating = (await q('select rating_as_driver from users where id = $1', [b.driver_id])).rows[0]?.rating_as_driver ?? null;
     b.extras = (await q(
       `select be.id, et.name, be.price, be.price_unit, be.quantity, be.line_total
        from booking_extras be join extra_types et on et.id = be.extra_type_id where be.booking_id = $1 order by et.name`, [id])).rows;
@@ -404,7 +415,7 @@ export class BookingsService {
     const col = role === 'driver' ? 'b.driver_id' : 'b.host_id';
     const { rows } = await this.db.query(
       `select b.id, b.reference, b.status, b.booked_start, b.booked_end, b.actual_parked_at, b.actual_ended_at,
-              b.total_amount, b.commission_amount, b.host_earnings, b.listing_id, l.title,
+              b.total_amount, b.commission_amount, b.host_earnings, b.listing_id, l.title, du.rating_as_driver as driver_rating,
               ${role === 'driver' ? `case when b.status in ('confirmed','parked','overstay','completed') then l.address end as address, hu.name as other_name`
                                   : `du.name as other_name`}, v.plate,
               exists (select 1 from reviews r where r.booking_id = b.id and r.from_user_id = $1) as reviewed
@@ -414,6 +425,60 @@ export class BookingsService {
        where ${col} = $1 and b.status <> 'pending_payment'
        order by b.booked_start desc limit 200`, [userId]);
     return rows.map((r) => ({ ...r, other_name: String(r.other_name).split(' ')[0] }));
+  }
+
+  /** Reverses `amount` of a paid booking back to the driver; commission and host earnings shrink in proportion. */
+  async refundBooking(c: PoolClient, bookingId: string, amount: number, actor: 'admin' | 'system', actorId: string | null, note?: string) {
+    const b = (await c.query('select * from bookings where id = $1 for update', [bookingId])).rows[0];
+    if (!b) throw new NotFoundException();
+    if (!['completed', 'cancelled'].includes(b.status)) throw new BadRequestException('Only finished bookings can be refunded this way');
+    const net = Number((await c.query(
+      `select coalesce(sum(case when type in ('charge','overstay_fee') then amount when type = 'refund' then -amount else 0 end),0) as n
+       from transactions where booking_id = $1 and user_id = $2`, [bookingId, b.driver_id])).rows[0].n);
+    const r = r2(amount);
+    if (!(r > 0)) throw new BadRequestException('Enter a refund amount');
+    if (r > net + 0.001) throw new BadRequestException(`The most that can be refunded is £${net.toFixed(2)}`);
+    const commission = r2(r * Number(b.commission_rate));
+    await c.query(
+      `insert into transactions (booking_id, user_id, type, amount) values ($1,$2,'refund',$3), ($1,null,'commission',$4), ($1,$5,'host_earning',$6)`,
+      [bookingId, b.driver_id, r, -commission, b.host_id, -r2(r - commission)]);
+    await this.event(c, bookingId, 'refunded', actor, actorId);
+    const ref: [string, string] = ['booking', bookingId];
+    await this.notes.notify(b.driver_id, 'refund', 'Refund issued', `£${r.toFixed(2)} refunded for booking ${b.reference}.${note ? ' ' + note : ''}`, { ref, channels: ['push', 'email'], client: c });
+    await this.notes.notify(b.host_id, 'refund', 'Booking refunded', `£${r.toFixed(2)} was refunded to the driver for booking ${b.reference}; your earnings were adjusted.`, { ref, client: c });
+    return r;
+  }
+
+  /** "Space occupied on arrival": the driver can take a full refund straight away; the host is warned. */
+  async occupiedRefund(driverId: string, id: string) {
+    return this.db.tx(async (c) => {
+      const b = (await c.query(
+        `select * from bookings where id = $1 and driver_id = $2 and status in ('confirmed','parked') for update`, [id, driverId])).rows[0];
+      if (!b) throw new BadRequestException('This booking cannot be refunded this way');
+      await c.query(`update bookings set status = 'cancelled', cancelled_by = 'system', cancel_reason = 'space occupied' where id = $1`, [id]);
+      await c.query(`insert into transactions (booking_id, user_id, type, amount) values ($1,$2,'refund',$3)`, [id, driverId, b.total_amount]);
+      await this.event(c, id, 'cancelled', 'system');
+      await this.event(c, id, 'refunded', 'system');
+      await c.query(
+        `insert into disputes (booking_id, opened_by, type, description, status, resolution, refund_amount, resolved_at)
+         values ($1,$2,'space_occupied','Space occupied or inaccessible on arrival','resolved','Full refund issued automatically',$3, now())`,
+        [id, driverId, b.total_amount]);
+      const ref: [string, string] = ['booking', id];
+      await this.notes.notify(driverId, 'refund', 'Full refund issued', `£${Number(b.total_amount).toFixed(2)} refunded for booking ${b.reference}. Sorry about that.`, { ref, channels: ['push', 'email'], client: c });
+      await this.notes.notify(b.host_id, 'dispute', 'Warning: space was occupied',
+        `The driver for booking ${b.reference} could not use the space and was refunded in full. Repeated cases can lead to suspension.`, { ref, channels: ['push', 'email'], client: c });
+      return this.detail(driverId, id, c);
+    });
+  }
+
+  /** Admin force-end of a stuck parked/overstay booking. */
+  async adminForceEnd(adminId: string, id: string) {
+    return this.db.tx(async (c) => {
+      const b = (await c.query(`select * from bookings where id = $1 and status in ('parked','overstay','confirmed') for update`, [id])).rows[0];
+      if (!b) throw new BadRequestException('Booking is not active');
+      await this.complete(c, b, 'admin', adminId, 'ended');
+      return { ok: true };
+    });
   }
 
   private event(c: PoolClient, bookingId: string, event: string, actor: string, actorId: string | null = null,

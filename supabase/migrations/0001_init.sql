@@ -28,6 +28,10 @@ create table users (
   is_driver boolean not null default true,
   is_host boolean not null default false,
   is_admin boolean not null default false,
+  email_verified boolean not null default false,
+  phone_verified boolean not null default false,
+  terms_version int,
+  terms_accepted_at timestamptz,
   verification_status text not null default 'pending',
   account_status text not null default 'active',
   rating_as_driver numeric(3,2),
@@ -79,6 +83,7 @@ create table listings (
   min_offer_price numeric(8,2),
   cancellation_policy text not null default 'flexible' check (cancellation_policy in ('flexible','moderate','strict')),
   buffer_minutes int not null default 15,
+  permission_declared_at timestamptz,          -- host confirmed they may let this space (spec s3)
   status text not null default 'pending_approval'
     check (status in ('draft','pending_approval','live','paused','rejected','removed')),
   rating numeric(3,2),
@@ -253,6 +258,7 @@ create table disputes (
   booking_id uuid not null references bookings(id),
   opened_by uuid not null references users(id),
   type text not null,
+  extra_id uuid references booking_extras(id),   -- for 'extra_not_provided'
   description text,
   photos text[],
   status text not null default 'open' check (status in ('open','in_review','resolved')),
@@ -293,6 +299,39 @@ create table admin_audit_log (
   details jsonb,
   created_at timestamptz not null default now()
 );
+
+-- Users can block each other: blocked pairs cannot book, offer or chat.
+create table user_blocks (
+  blocker_id uuid not null references users(id),
+  blocked_id uuid not null references users(id),
+  created_at timestamptz not null default now(),
+  primary key (blocker_id, blocked_id)
+);
+
+-- One-time codes: email/phone verification and password reset (6 digits, hashed would be stronger in production).
+create table verification_codes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id),
+  kind text not null check (kind in ('email','phone','reset')),
+  code text not null,
+  target text,                       -- phone number being verified
+  expires_at timestamptz not null,
+  used boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+-- Admin-editable legal/help content (spec s13). `version` bumps on every edit; users store the version they accepted.
+create table content (
+  key text primary key,
+  title text not null,
+  body text not null,
+  version int not null default 1,
+  updated_at timestamptz not null default now()
+);
+insert into content (key, title, body) values
+  ('terms', 'Terms & Conditions', E'ParkSpace is a marketplace that connects people who want to park with people who have a space to rent.\n\n1. Bookings are between the driver and the host. ParkSpace takes a 20% commission from each booking.\n2. Hosts confirm they have the right to let the space (owner, or permission from landlord, council and mortgage provider).\n3. Drivers park at their own risk. Liability for damage is set by the final insurance and legal terms (to be confirmed with a lawyer and insurer before launch).\n4. Cancellations follow the host''s policy shown on the listing. Cancel within 5 minutes of booking for a full refund.\n5. Keep negotiation inside the app. Sharing phone numbers, emails or links to arrange off-platform deals is not allowed.\n\nThis is demo text for the proof of concept.'),
+  ('privacy', 'Privacy Policy', E'We collect the information needed to run the service: your name, email, phone, vehicles, bookings and payments (handled by our payment provider; we never store card numbers).\n\nLocation is used only with your consent, to find nearby spaces and to record where you parked.\n\nUnder UK GDPR you can download your data and delete your account from Profile. Financial records are kept as required by law; everything else is anonymised.\n\nThis is demo text for the proof of concept.'),
+  ('faq', 'Help & FAQs', E'How do I book? Search for a space, choose your times, pay, and you will get the address and access instructions.\n\nWhen am I charged? Instant-book spaces charge immediately. For request-to-book spaces your card is only held until the host accepts.\n\nWhat if the space is blocked? Open the booking, tap Report a problem, and choose a full refund.\n\nHow do hosts get paid? Earnings become available 24 hours after a booking ends (if there is no dispute) and are paid out to your bank.\n\nThis is demo text for the proof of concept.');
 
 -- Is a listing open for the whole window? Weekly rules are evaluated in UK local time
 -- (samples every 30 minutes); one-off host blocks always win. No rules = open 24/7.

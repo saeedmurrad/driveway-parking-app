@@ -6,6 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { BookingsService } from '../bookings/bookings.service';
 import { calculatePrice } from '../bookings/pricing';
 import { containsContactInfo } from './contact-filter';
+import { AuthService } from '../auth/auth.service';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const MAX_ROUND = 4; // 1 offer + 3 counter-offers
@@ -18,6 +19,7 @@ export class OffersService {
     private readonly settings: SettingsService,
     private readonly notes: NotificationsService,
     private readonly bookings: BookingsService,
+    private readonly auth: AuthService,
   ) {}
 
   private expiry(start: Date) {
@@ -40,6 +42,7 @@ export class OffersService {
     const start = new Date(d.start), end = new Date(d.end);
     if (!(end > start) || start.getTime() < Date.now() - 10 * 60_000) throw new BadRequestException('Invalid stay times');
     if (d.message && containsContactInfo(d.message)) throw new BadRequestException(SAFETY);
+    await this.auth.assertVerified(driverId);
     const l = (await this.db.query(
       `select id, title, host_id, allow_offers, min_offer_price, buffer_minutes, price_hour, price_day
        from listings where id = $1 and status = 'live'`, [d.listingId])).rows[0];
@@ -156,7 +159,7 @@ export class OffersService {
 
   async mine(userId: string) {
     const { rows } = await this.db.query(
-      `select distinct on (o.thread_id) o.*, l.title, l.host_id, l.price_hour, l.price_day,
+      `select distinct on (o.thread_id) o.*, l.title, l.host_id, l.price_hour, l.price_day, du.rating_as_driver as driver_rating,
               split_part(du.name,' ',1) as driver_name, split_part(hu.name,' ',1) as host_name,
               (select count(*) from offers x where x.thread_id = o.thread_id)::int as steps
        from offers o join listings l on l.id = o.listing_id

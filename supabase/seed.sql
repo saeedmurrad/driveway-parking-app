@@ -1,9 +1,9 @@
 -- Demo data. All demo accounts use the password: demo1234
-insert into users (id, name, email, password_hash, is_driver, is_host, is_admin, verification_status) values
-  ('00000000-0000-4000-8000-000000000001','Helen Hart','host@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, true, false, 'verified'),
-  ('00000000-0000-4000-8000-000000000002','Dan Driver','driver@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, false, false, 'verified'),
-  ('00000000-0000-4000-8000-000000000003','Ada Admin','admin@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, false, true, 'verified'),
-  ('00000000-0000-4000-8000-000000000004','Omar Khan','omar@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, true, false, 'verified');
+insert into users (id, name, email, password_hash, is_driver, is_host, is_admin, verification_status, email_verified, phone_verified, terms_version, terms_accepted_at) values
+  ('00000000-0000-4000-8000-000000000001','Helen Hart','host@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, true, false, 'verified', true, true, 1, now()),
+  ('00000000-0000-4000-8000-000000000002','Dan Driver','driver@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, false, false, 'verified', true, true, 1, now()),
+  ('00000000-0000-4000-8000-000000000003','Ada Admin','admin@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, false, true, 'verified', true, true, 1, now()),
+  ('00000000-0000-4000-8000-000000000004','Omar Khan','omar@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, true, false, 'verified', true, true, 1, now());
 
 insert into vehicles (user_id, plate, make, model, colour, size, is_ev, ev_connector) values
   ('00000000-0000-4000-8000-000000000002','AB12 CDE','Ford','Focus','Blue','medium', false, null),
@@ -19,6 +19,8 @@ insert into listings (id, host_id, title, address, postcode, latitude, longitude
  ('10000000-0000-4000-8000-000000000006','00000000-0000-4000-8000-000000000004','Shoreditch driveway','31 Bethnal Green Rd, London','E1 6GY',51.5254,-0.0786,'driveway','medium','{lit}','Drive on the right-hand side of the house.',2.20,12.00,'flexible',4.4,'live'),
  ('10000000-0000-4000-8000-000000000007','00000000-0000-4000-8000-000000000004','Waterloo covered parking bay','14 The Cut, London','SE1 8LN',51.5031,-0.1132,'bay','medium','{covered,cctv,gated}','Fob at the gate is on the key hook by the door.',4.00,26.00,'moderate',4.9,'live'),
  ('10000000-0000-4000-8000-000000000008','00000000-0000-4000-8000-000000000004','Canary Wharf forecourt','3 Marsh Wall, London','E14 9SH',51.5054,-0.0235,'forecourt','large','{gated,lit,level_access}','Ring bell 6.',3.80,24.00,'flexible',null,'pending_approval');
+
+update listings set permission_declared_at = now();
 
 -- Feature flags for demos: price negotiation, request-to-book, and office-hours availability.
 update listings set allow_offers = true, min_offer_price = 1.75 where id = '10000000-0000-4000-8000-000000000001';

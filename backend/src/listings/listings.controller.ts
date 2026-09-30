@@ -6,6 +6,7 @@ import { AuthGuard, CurrentUser } from '../auth/auth.guard';
 import { BookingsService } from '../bookings/bookings.service';
 import { calculatePrice } from '../bookings/pricing';
 import { SettingsService } from '../settings/settings.service';
+import { AuthService } from '../auth/auth.service';
 
 class ListingBase {
   @IsOptional() @IsString() postcode?: string;
@@ -23,6 +24,7 @@ class ListingBase {
   @IsOptional() @IsInt() @Min(0) @Max(120) bufferMinutes?: number;
 }
 class CreateListingDto extends ListingBase {
+  @IsBoolean() permissionDeclared: boolean;
   @IsString() @MinLength(3) title: string;
   @IsString() @MinLength(3) address: string;
   @IsNumber() @Min(-90) @Max(90) latitude: number;
@@ -85,6 +87,7 @@ export class ListingsController {
     private readonly db: DbService,
     private readonly bookings: BookingsService,
     private readonly settings: SettingsService,
+    private readonly auth: AuthService,
   ) {}
 
   /** GET /listings/search?lat=&lng=&start=&end=&radius=&vehicleSize= */
@@ -134,8 +137,10 @@ export class ListingsController {
   @Post() @UseGuards(AuthGuard)
   async create(@CurrentUser() u: AuthUser, @Body() d: CreateListingDto) {
     if (!u.isHost) throw new ForbiddenException('Switch to a host account first');
-    const cols = ['host_id', 'status'];
-    const vals: unknown[] = [u.id, 'pending_approval'];
+    await this.auth.assertVerified(u.id);
+    if (d.permissionDeclared !== true) throw new BadRequestException('Please confirm you have the right to let this space (owner, or permission from your landlord/council/mortgage provider).');
+    const cols = ['host_id', 'status', 'permission_declared_at'];
+    const vals: unknown[] = [u.id, 'pending_approval', new Date()];
     for (const [k, col] of Object.entries(COLS)) {
       if ((d as any)[k] !== undefined) { cols.push(col); vals.push((d as any)[k]); }
     }

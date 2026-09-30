@@ -8,6 +8,10 @@ import { BookingsModule } from './bookings/bookings.module';
 import { AuthModule } from './auth/auth.module';
 import { MeModule } from './me/me.module';
 import { AdminModule } from './admin/admin.module';
+import { AuditModule } from './audit/audit.service';
+import { ChatModule } from './chat/chat.controller';
+import { ContentModule } from './content/content.controller';
+import { DisputesModule } from './disputes/disputes.controller';
 import { ExtrasModule } from './extras/extras.module';
 import { OffersModule } from './offers/offers.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -25,6 +29,10 @@ import { NotificationsModule } from './notifications/notifications.module';
     NotificationsModule,
     OffersModule,
     ExtrasModule,
+    AuditModule,
+    ChatModule,
+    ContentModule,
+    DisputesModule,
   ],
   controllers: [HealthController],
 })

@@ -5,11 +5,12 @@ import { AuthService, AuthUser } from './auth.service';
 export class AuthGuard implements CanActivate {
   constructor(protected readonly auth: AuthService) {}
 
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
     const h: string | undefined = req.headers.authorization;
     const user = h?.startsWith('Bearer ') ? this.auth.verify(h.slice(7)) : null;
     if (!user) throw new UnauthorizedException();
+    if (!(await this.auth.isActive(user.id))) throw new ForbiddenException('This account is suspended or deleted.');
     req.user = user;
     return true;
   }
@@ -17,8 +18,8 @@ export class AuthGuard implements CanActivate {
 
 @Injectable()
 export class AdminGuard extends AuthGuard {
-  canActivate(ctx: ExecutionContext): boolean {
-    super.canActivate(ctx);
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    await super.canActivate(ctx);
     if (!ctx.switchToHttp().getRequest().user.isAdmin) throw new ForbiddenException('Admins only');
     return true;
   }
