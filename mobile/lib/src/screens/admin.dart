@@ -146,6 +146,9 @@ class AdminSettings extends StatelessWidget {
           const Text('Changes apply to new bookings. Existing bookings keep the commission rate they were made with.', style: TextStyle(color: Colors.black54)),
           const SizedBox(height: 14),
           for (final r in rows) Padding(padding: const EdgeInsets.only(bottom: 10), child: _SettingRow(row: r, label: _labels[r['key']]!.$1, hint: _labels[r['key']]!.$2, onSaved: reload)),
+          const SizedBox(height: 18),
+          const _ExtraTypesAdmin(),
+          const SizedBox(height: 30),
         ])),
       ]),
     );
@@ -188,4 +191,70 @@ class _SettingRowState extends State<_SettingRow> {
           child: const Text('Save'),
         ),
       ])));
+}
+
+class _ExtraTypesAdmin extends StatelessWidget {
+  const _ExtraTypesAdmin();
+
+  Future<void> _add(BuildContext context, Future<void> Function() reload) async {
+    final name = TextEditingController(), desc = TextEditingController();
+    final units = <String>{'per_booking'};
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => StatefulBuilder(builder: (c, set) => AlertDialog(
+        title: const Text('New extra type'),
+        content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(controller: name, decoration: const InputDecoration(labelText: 'Name, e.g. Bike rack')),
+          const SizedBox(height: 10),
+          TextField(controller: desc, decoration: const InputDecoration(labelText: 'Description')),
+          const SizedBox(height: 10),
+          const Text('Hosts can charge it:'),
+          Wrap(spacing: 8, children: [
+            for (final u in const ['per_booking', 'per_hour', 'per_day', 'per_kwh'])
+              FilterChip(label: Text(u.replaceFirst('per_', 'per ')), selected: units.contains(u), onSelected: (v) => set(() => v ? units.add(u) : units.remove(u))),
+          ]),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Add')),
+        ],
+      )),
+    );
+    if (ok != true || name.text.trim().isEmpty || !context.mounted) return;
+    try {
+      await context.read<AppState>().api.post('/admin/extra-types', {'name': name.text.trim(), 'description': desc.text.trim(), 'allowedPriceUnits': units.toList()});
+      await reload();
+    } on ApiException catch (e) {
+      if (context.mounted) toast(context, e.message, error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final api = context.read<AppState>().api;
+    return Loader<List<Json>>(
+      load: () async => ((await api.get('/admin/extra-types')) as List).map((e) => Map<String, dynamic>.from(e)).toList(),
+      builder: (context, types, reload) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Expanded(child: Text('Paid extras catalogue', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18))),
+          FilledButton.tonalIcon(onPressed: () => _add(context, reload), icon: const Icon(Icons.add), label: const Text('Add type')),
+        ]),
+        const SizedBox(height: 4),
+        const Text('New types appear for hosts immediately, no app update needed.', style: TextStyle(color: Colors.black54)),
+        const SizedBox(height: 8),
+        Card(child: Column(children: [
+          for (final t in types)
+            SwitchListTile(
+              value: t['active'] == true,
+              title: Text(t['name'], style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('${(t['allowed_price_units'] as List).join(', ').replaceAll('per_', '')}${t['ev_only'] == true ? ' · EV only' : ''}'),
+              onChanged: (v) async {
+                await api.patch('/admin/extra-types/${t['id']}', {'active': v});
+                await reload();
+              },
+            ),
+        ])),
+      ]),
+    );
+  }
 }

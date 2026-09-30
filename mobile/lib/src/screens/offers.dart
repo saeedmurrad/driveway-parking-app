@@ -9,7 +9,7 @@ import 'booking_detail.dart';
 /// Opens the "make an offer" dialog from a space page. Returns the created thread id (or null).
 Future<String?> showMakeOffer(BuildContext context, {
   required String listingId, required String title, required double listedTotal,
-  required DateTime start, required DateTime end, String? vehicleId,
+  required DateTime start, required DateTime end, String? vehicleId, List<Json> extras = const [],
 }) async {
   final amount = TextEditingController();
   final message = TextEditingController();
@@ -42,6 +42,7 @@ Future<String?> showMakeOffer(BuildContext context, {
               final api = context.read<AppState>().api;
               final r = await api.post('/offers', {
                 'listingId': listingId, 'vehicleId': ?vehicleId,
+                if (extras.isNotEmpty) 'extras': extras,
                 'start': start.toUtc().toIso8601String(), 'end': end.toUtc().toIso8601String(),
                 'amount': a, if (message.text.trim().isNotEmpty) 'message': message.text.trim(),
               });

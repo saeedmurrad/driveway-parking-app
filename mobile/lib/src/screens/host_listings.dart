@@ -116,6 +116,18 @@ class _ListingCard extends StatelessWidget {
       ]);
 }
 
+/// Per-type pricing state for the extras editor.
+class _ExtraRow {
+  _ExtraRow(this.type, {this.on = false, String price = '', String? unit, this.connector = 'type2', String kw = '7'})
+      : price = TextEditingController(text: price),
+        kw = TextEditingController(text: kw),
+        unit = unit ?? (type['allowed_price_units'] as List).first;
+  final Json type;
+  bool on;
+  final TextEditingController price, kw;
+  String unit, connector;
+}
+
 class AddListing extends StatefulWidget {
   const AddListing({super.key, this.initial});
   final Json? initial;
@@ -145,6 +157,44 @@ class _AddListingState extends State<AddListing> {
   late LatLng _pin = LatLng(num_(_i['latitude'] ?? 51.5308), num_(_i['longitude'] ?? -0.1238));
   bool _busy = false;
   bool get _editing => widget.initial != null;
+  List<_ExtraRow> _extras = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExtras();
+  }
+
+  Future<void> _loadExtras() async {
+    final api = context.read<AppState>().api;
+    try {
+      final types = ((await api.get('/extra-types')) as List).map((e) => Map<String, dynamic>.from(e)).toList();
+      final mine = _editing ? ((await api.get('/listings/${_i['id']}/extras')) as List).map((e) => Map<String, dynamic>.from(e)).toList() : <Json>[];
+      if (!mounted) return;
+      setState(() => _extras = [
+            for (final t in types)
+              () {
+                final m = mine.where((x) => x['extra_type_id'] == t['id'] && x['active'] == true).firstOrNull;
+                final d = (m?['details'] as Map?) ?? const {};
+                return _ExtraRow(t, on: m != null, price: m == null ? '' : '${num_(m['price'])}', unit: m?['price_unit'],
+                    connector: d['connector'] ?? 'type2', kw: '${d['kw'] ?? 7}');
+              }(),
+          ]);
+    } catch (_) {}
+  }
+
+  Future<void> _saveExtras(String listingId) async {
+    final rows = _extras.where((r) => r.on && double.tryParse(r.price.text) != null);
+    await context.read<AppState>().api.put('/listings/$listingId/extras', {
+      'extras': [
+        for (final r in rows)
+          {
+            'extraTypeId': r.type['id'], 'price': double.parse(r.price.text), 'priceUnit': r.unit,
+            if (r.type['ev_only'] == true) 'details': {'connector': r.connector, 'kw': int.tryParse(r.kw.text) ?? 7},
+          },
+      ],
+    });
+  }
 
   Future<void> _submit() async {
     final hour = double.tryParse(_hour.text);
@@ -169,8 +219,10 @@ class _AddListingState extends State<AddListing> {
       final api = context.read<AppState>().api;
       if (_editing) {
         await api.patch('/listings/${_i['id']}', body);
+        await _saveExtras(_i['id']);
       } else {
-        await api.post('/listings', body..removeWhere((k, v) => v == null));
+        final created = await api.post('/listings', body..removeWhere((k, v) => v == null));
+        await _saveExtras(created['id']);
       }
       if (!mounted) return;
       if (!_editing) {
@@ -298,6 +350,12 @@ class _AddListingState extends State<AddListing> {
                   onSelected: (v) => setState(() => v ? _features.add(e.key) : _features.remove(e.key)),
                 ),
             ]),
+            if (_extras.isNotEmpty) ...[
+              _section('Paid extras'),
+              const Text('Optional add-ons drivers can tick at booking. Extras are included in the 20% commission.', style: TextStyle(color: Colors.black54, fontSize: 12)),
+              const SizedBox(height: 8),
+              for (final r in _extras) _extraEditor(r),
+            ],
             _section('Policy & access'),
             DropdownButtonFormField<String>(
               initialValue: _policy, decoration: const InputDecoration(labelText: 'Cancellation policy'),
@@ -316,6 +374,40 @@ class _AddListingState extends State<AddListing> {
           ])),
         ]),
       );
+
+  String _unitName(String u) => switch (u) { 'per_hour' => 'per hour', 'per_day' => 'per day', 'per_kwh' => 'per kWh', _ => 'per booking' };
+
+  Widget _extraEditor(_ExtraRow r) => Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero, dense: true, value: r.on,
+          onChanged: (v) => setState(() => r.on = v),
+          title: Text(r.type['name'], style: const TextStyle(fontWeight: FontWeight.w700)),
+          subtitle: Text('${r.type['description'] ?? ''}${r.type['ev_only'] == true ? ' (shown only to matching EVs)' : ''}'),
+        ),
+        if (r.on) ...[
+          Row(children: [
+            Expanded(child: TextField(controller: r.price, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price', prefixText: '£ ', isDense: true))),
+            const SizedBox(width: 10),
+            Expanded(child: DropdownButtonFormField<String>(
+              initialValue: r.unit, decoration: const InputDecoration(labelText: 'Charged', isDense: true),
+              items: [for (final u in (r.type['allowed_price_units'] as List).cast<String>()) DropdownMenuItem(value: u, child: Text(_unitName(u)))],
+              onChanged: (v) => setState(() => r.unit = v!),
+            )),
+          ]),
+          if (r.type['ev_only'] == true) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: DropdownButtonFormField<String>(
+                initialValue: r.connector, decoration: const InputDecoration(labelText: 'Connector', isDense: true),
+                items: const [DropdownMenuItem(value: 'type2', child: Text('Type 2')), DropdownMenuItem(value: 'ccs', child: Text('CCS')), DropdownMenuItem(value: 'chademo', child: Text('CHAdeMO'))],
+                onChanged: (v) => setState(() => r.connector = v!),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: TextField(controller: r.kw, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Power (kW)', isDense: true))),
+            ]),
+          ],
+        ],
+      ])));
 
   Widget _section(String t) => Padding(padding: const EdgeInsets.only(top: 22, bottom: 10), child: Text(t, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)));
 }

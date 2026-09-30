@@ -8,7 +8,8 @@ class ProfileScreen extends StatelessWidget {
 
   Future<void> _addVehicle(BuildContext context) async {
     final plate = TextEditingController(), make = TextEditingController(), model = TextEditingController();
-    String size = 'medium';
+    String size = 'medium', connector = 'type2';
+    bool isEv = false;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => StatefulBuilder(builder: (c, set) => AlertDialog(
@@ -21,6 +22,13 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(child: TextField(controller: model, decoration: const InputDecoration(labelText: 'Model'))),
           ]),
+          const SizedBox(height: 10),
+          SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Electric vehicle'), value: isEv, onChanged: (v) => set(() => isEv = v)),
+          if (isEv) DropdownButtonFormField<String>(
+            initialValue: connector, decoration: const InputDecoration(labelText: 'Charging connector'),
+            items: const [DropdownMenuItem(value: 'type2', child: Text('Type 2')), DropdownMenuItem(value: 'ccs', child: Text('CCS')), DropdownMenuItem(value: 'chademo', child: Text('CHAdeMO'))],
+            onChanged: (v) => set(() => connector = v!),
+          ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
             initialValue: size, decoration: const InputDecoration(labelText: 'Size'),
@@ -40,7 +48,7 @@ class ProfileScreen extends StatelessWidget {
     if (ok != true || plate.text.trim().length < 2 || !context.mounted) return;
     final s = context.read<AppState>();
     try {
-      await s.api.post('/me/vehicles', {'plate': plate.text.trim(), 'make': make.text.trim(), 'model': model.text.trim(), 'size': size});
+      await s.api.post('/me/vehicles', {'plate': plate.text.trim(), 'make': make.text.trim(), 'model': model.text.trim(), 'size': size, 'isEv': isEv, if (isEv) 'evConnector': connector});
       await s.loadVehicles();
     } catch (e) {
       if (context.mounted) toast(context, '$e', error: true);
@@ -79,7 +87,7 @@ class ProfileScreen extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.directions_car),
               title: Text('${v['plate']}', style: const TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text('${v['make'] ?? ''} ${v['model'] ?? ''} · ${v['size']}'.trim()),
+              subtitle: Text('${v['make'] ?? ''} ${v['model'] ?? ''} · ${v['size']}${v['is_ev'] == true ? ' · EV (${v['ev_connector']})' : ''}'.trim()),
               trailing: s.vehicle?['id'] == v['id'] ? const Chip(label: Text('Default'), visualDensity: VisualDensity.compact) : TextButton(onPressed: () => s.selectVehicle(v['id']), child: const Text('Use')),
             ),
         ]))),

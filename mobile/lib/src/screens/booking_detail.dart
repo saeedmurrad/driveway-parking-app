@@ -152,6 +152,7 @@ class _BookingDetailState extends State<BookingDetail> {
             Row(children: [Expanded(child: Text(b['title'], style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800))), StatusChip(status)]),
             const SizedBox(height: 8),
             Row(children: [const Icon(Icons.event, size: 18, color: Colors.black54), const SizedBox(width: 8), Expanded(child: Text(fmtRange(b['booked_start'], b['booked_end'])))]),
+            if (b['offer_id'] != null) Padding(padding: const EdgeInsets.only(top: 6), child: Row(children: [const Icon(Icons.handshake_outlined, size: 18, color: Colors.teal), const SizedBox(width: 8), const Text('Negotiated price', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600))])),
             if (b['plate'] != null) ...[
               const SizedBox(height: 6),
               Row(children: [const Icon(Icons.directions_car, size: 18, color: Colors.black54), const SizedBox(width: 8), Text('${b['plate']}${b['make'] != null ? ' · ${b['make']} ${b['model'] ?? ''}' : ''}')]),
@@ -190,6 +191,9 @@ class _BookingDetailState extends State<BookingDetail> {
             _kv('Left at', b['actual_ended_at'] == null ? '—' : fmtFull(b['actual_ended_at'])),
             const Divider(height: 22),
             _kv('Parking', money(b['parking_amount'])),
+            for (final x in (b['extras'] as List).cast<Map>())
+              _kv('${x['name']}${x['price_unit'] == 'per_booking' ? '' : ' × ${num_(x['quantity']).toStringAsFixed(0)}'}', money(x['line_total'])),
+            if (num_(b['overstay_fee']) > 0) _kv('Overstay fee', money(b['overstay_fee'])),
             _kv('Total paid', money(b['total_amount']), bold: true),
             if (isHost) ...[
               _kv('Platform commission (${(num_(b['commission_rate']) * 100).toStringAsFixed(0)}%)', '- ${money(b['commission_amount'])}'),
