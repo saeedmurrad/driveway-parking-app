@@ -11,6 +11,7 @@ import 'host_listings.dart';
 import 'offers.dart';
 import 'notifications.dart';
 import 'profile.dart';
+import 'verify.dart';
 import 'spending.dart';
 
 class Shell extends StatefulWidget {
@@ -78,7 +79,9 @@ class _ShellState extends State<Shell> {
           const SizedBox(width: 12),
         ],
       ),
-      body: wide
+      body: Column(children: [
+        const VerifyBanner(),
+        Expanded(child: wide
           ? Row(children: [
               NavigationRail(
                 backgroundColor: Colors.white,
@@ -90,7 +93,8 @@ class _ShellState extends State<Shell> {
               const VerticalDivider(width: 1),
               Expanded(child: body),
             ])
-          : body,
+          : body),
+      ]),
       bottomNavigationBar: wide
           ? null
           : NavigationBar(

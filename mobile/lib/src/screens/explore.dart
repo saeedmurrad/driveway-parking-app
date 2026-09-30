@@ -4,6 +4,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import '../api.dart';
 import '../state.dart';
 import '../ui.dart';
 import 'space_detail.dart';
@@ -339,11 +340,14 @@ class _ResultList extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Row(children: [
-                Container(
-                  width: 64, height: 64,
-                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
-                    gradient: const LinearGradient(colors: [Color(0xFFDDE7FF), Color(0xFFB9CDFF)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
-                  child: Icon(spaceIcons[l['space_type']] ?? Icons.local_parking, color: brand, size: 30),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: SizedBox(
+                    width: 72, height: 72,
+                    child: l['photo_url'] != null
+                        ? Image.network(mediaUrl(l['photo_url']), fit: BoxFit.cover, errorBuilder: (_, _, _) => _thumbFallback(l))
+                        : _thumbFallback(l),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -373,3 +377,8 @@ class _ResultList extends StatelessWidget {
     );
   }
 }
+
+Widget _thumbFallback(Json l) => Container(
+      decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFFDDE7FF), Color(0xFFB9CDFF)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+      child: Icon(spaceIcons[l['space_type']] ?? Icons.local_parking, color: brand, size: 30),
+    );

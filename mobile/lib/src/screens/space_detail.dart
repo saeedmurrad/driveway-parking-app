@@ -169,11 +169,7 @@ class _SpaceDetailState extends State<SpaceDetail> {
           final hours = (widget.end.difference(widget.start).inMinutes / 60).ceil();
           return Stack(children: [
             ListView(padding: EdgeInsets.zero, children: [
-              Container(
-                height: 180,
-                decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF1234A8), Color(0xFF2D6BFF)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
-                child: Center(child: Icon(spaceIcons[l['space_type']] ?? Icons.local_parking, size: 84, color: Colors.white.withValues(alpha: 0.9))),
-              ),
+              _Gallery(photos: (l['photos'] as List).cast<Map>(), fallbackIcon: spaceIcons[l['space_type']] ?? Icons.local_parking),
               Centered(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -371,4 +367,47 @@ class _Checkout extends StatelessWidget {
           FilledButton(onPressed: () => Navigator.pop(context, true), child: Text('Pay ${money(quote['total'])}')),
         ]),
       );
+}
+
+class _Gallery extends StatefulWidget {
+  const _Gallery({required this.photos, required this.fallbackIcon});
+  final List<Map> photos;
+  final IconData fallbackIcon;
+
+  @override
+  State<_Gallery> createState() => _GalleryState();
+}
+
+class _GalleryState extends State<_Gallery> {
+  int _i = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.photos.isEmpty) {
+      return Container(
+        height: 180,
+        decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF1234A8), Color(0xFF2D6BFF)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
+        child: Center(child: Icon(widget.fallbackIcon, size: 84, color: Colors.white.withValues(alpha: 0.9))),
+      );
+    }
+    return SizedBox(
+      height: 240,
+      child: Stack(children: [
+        PageView.builder(
+          itemCount: widget.photos.length,
+          onPageChanged: (i) => setState(() => _i = i),
+          itemBuilder: (_, i) => Image.network(mediaUrl(widget.photos[i]['url']), fit: BoxFit.cover, width: double.infinity,
+              errorBuilder: (_, _, _) => Container(color: const Color(0xFFDDE7FF), child: Icon(widget.fallbackIcon, size: 60, color: brand))),
+        ),
+        if (widget.photos.length > 1)
+          Positioned(
+            bottom: 10, left: 0, right: 0,
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              for (var i = 0; i < widget.photos.length; i++)
+                Container(margin: const EdgeInsets.symmetric(horizontal: 3), width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: i == _i ? Colors.white : Colors.white54)),
+            ]),
+          ),
+      ]),
+    );
+  }
 }

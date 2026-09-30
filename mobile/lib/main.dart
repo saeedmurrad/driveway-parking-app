@@ -5,6 +5,8 @@ import 'src/screens/shell.dart';
 import 'src/state.dart';
 import 'src/ui.dart';
 
+final navigatorKey = GlobalKey<NavigatorState>();
+
 void main() => runApp(ChangeNotifierProvider(create: (_) => AppState()..init(), child: const ParkSpaceApp()));
 
 class ParkSpaceApp extends StatelessWidget {
@@ -40,6 +42,7 @@ class ParkSpaceApp extends StatelessWidget {
         ),
         navigationBarTheme: const NavigationBarThemeData(backgroundColor: Colors.white, surfaceTintColor: Colors.white),
       ),
+      navigatorKey: navigatorKey,
       home: const _Gate(),
     );
   }

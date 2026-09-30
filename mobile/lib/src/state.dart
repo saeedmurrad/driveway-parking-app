@@ -49,9 +49,18 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> register(String name, String email, String password, bool host) async {
-    await _adopt(await api.post('/auth/register', {'name': name, 'email': email, 'password': password, 'isHost': host}));
+  /// Returns the demo email code (only present when the API runs in DEMO_MODE).
+  Future<String?> register(String name, String email, String password, bool host) async {
+    final res = await api.post('/auth/register', {'name': name, 'email': email, 'password': password, 'isHost': host, 'acceptTerms': true});
+    await _adopt(res);
     mode = host ? Mode.host : Mode.driver;
+    notifyListeners();
+    return res['devEmailCode'];
+  }
+
+  Future<void> refreshUser() async {
+    final res = await api.get('/auth/me');
+    user = Map<String, dynamic>.from(res['user']);
     notifyListeners();
   }
 

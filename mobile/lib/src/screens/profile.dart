@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state.dart';
+import '../api.dart';
+import '../download.dart';
 import '../ui.dart';
+import 'legal.dart';
+import 'verify.dart';
+import 'dart:convert';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -105,6 +110,49 @@ class ProfileScreen extends StatelessWidget {
               },
             ),
           ]))),
+        const SizedBox(height: 12),
+        Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Account & privacy', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          ListTile(contentPadding: EdgeInsets.zero, leading: Icon(u['emailVerified'] == true && u['phoneVerified'] == true ? Icons.verified_user : Icons.verified_user_outlined, color: u['emailVerified'] == true && u['phoneVerified'] == true ? Colors.green : Colors.orange),
+            title: Text(u['emailVerified'] == true && u['phoneVerified'] == true ? 'Email and phone verified' : 'Verify your account'),
+            trailing: const Icon(Icons.chevron_right), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VerifyScreen()))),
+          for (final e in const [('terms', 'Terms & Conditions', Icons.description_outlined), ('privacy', 'Privacy Policy', Icons.privacy_tip_outlined), ('faq', 'Help & FAQs', Icons.help_outline)])
+            ListTile(contentPadding: EdgeInsets.zero, leading: Icon(e.$3), title: Text(e.$2), trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LegalScreen(contentKey: e.$1)))),
+          ListTile(
+            contentPadding: EdgeInsets.zero, leading: const Icon(Icons.download_outlined), title: const Text('Download my data'), subtitle: const Text('A copy of everything we hold about you (JSON)'),
+            onTap: () async {
+              try {
+                final data = await s.api.get('/me/export');
+                final real = await downloadText('parkspace-my-data.json', const JsonEncoder.withIndent('  ').convert(data), mime: 'application/json');
+                if (context.mounted) toast(context, real ? 'Your data was downloaded' : 'Your data was copied to the clipboard');
+              } on ApiException catch (e) {
+                if (context.mounted) toast(context, e.message, error: true);
+              }
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero, leading: Icon(Icons.delete_outline, color: Colors.red.shade700), title: Text('Delete my account', style: TextStyle(color: Colors.red.shade700)),
+            subtitle: const Text('Financial records are kept as the law requires; everything else is anonymised'),
+            onTap: () async {
+              final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+                title: const Text('Delete your account?'),
+                content: const Text('This cannot be undone. Your listings are removed and your personal details are anonymised. You need to finish or cancel upcoming bookings first.'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep my account')),
+                  FilledButton(style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700), onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
+                ],
+              ));
+              if (ok != true) return;
+              try {
+                await s.api.delete('/me');
+                await s.logout();
+              } on ApiException catch (e) {
+                if (context.mounted) toast(context, e.message, error: true);
+              }
+            },
+          ),
+        ]))),
         const SizedBox(height: 12),
         OutlinedButton.icon(onPressed: s.logout, icon: const Icon(Icons.logout), label: const Text('Sign out')),
       ])),

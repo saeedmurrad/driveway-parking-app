@@ -1,3 +1,4 @@
+// ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -6,6 +7,7 @@ import '../api.dart';
 import '../state.dart';
 import '../ui.dart';
 import 'availability.dart';
+import 'booking_tools.dart';
 
 class HostListings extends StatelessWidget {
   const HostListings({super.key});
@@ -51,10 +53,11 @@ class _ListingCard extends StatelessWidget {
     final api = context.read<AppState>().api;
     return Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        Container(
-          width: 52, height: 52,
-          decoration: BoxDecoration(color: const Color(0xFFDDE7FF), borderRadius: BorderRadius.circular(12)),
-          child: Icon(spaceIcons[l['space_type']] ?? Icons.local_parking, color: brand),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(width: 56, height: 56, child: (l['photos'] as List).isNotEmpty
+              ? Image.network(mediaUrl((l['photos'] as List).first['url']), fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.local_parking, color: brand))
+              : Container(color: const Color(0xFFDDE7FF), child: Icon(spaceIcons[l['space_type']] ?? Icons.local_parking, color: brand))),
         ),
         const SizedBox(width: 12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -158,6 +161,8 @@ class _AddListingState extends State<AddListing> {
   bool _busy = false;
   bool get _editing => widget.initial != null;
   List<_ExtraRow> _extras = [];
+  late final List<Map<String, dynamic>> _photos = ((_i['photos'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e)).toList();
+  bool _declared = false;
 
   @override
   void initState() {
@@ -221,8 +226,12 @@ class _AddListingState extends State<AddListing> {
         await api.patch('/listings/${_i['id']}', body);
         await _saveExtras(_i['id']);
       } else {
-        final created = await api.post('/listings', body..removeWhere((k, v) => v == null));
+        if (!_declared) throw ApiException('Please confirm you have the right to let this space', 0);
+        final created = await api.post('/listings', body..removeWhere((k, v) => v == null)..['permissionDeclared'] = true);
         await _saveExtras(created['id']);
+        for (final p in _photos) {
+          await api.post('/listings/${created['id']}/photos', {'url': p['url']});
+        }
       }
       if (!mounted) return;
       if (!_editing) {
@@ -273,6 +282,40 @@ class _AddListingState extends State<AddListing> {
                 ],
                 onChanged: (v) => setState(() => _size = v!),
               )),
+            ]),
+            _section('Photos'),
+            const Text('Add a few clear photos of the space and entrance (up to 10).', style: TextStyle(color: Colors.black54)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final p in _photos)
+                Stack(children: [
+                  ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.network(mediaUrl(p['url']), width: 96, height: 72, fit: BoxFit.cover, errorBuilder: (_, _, _) => Container(width: 96, height: 72, color: const Color(0xFFDDE7FF)))),
+                  Positioned(top: 2, right: 2, child: InkWell(
+                    onTap: () async {
+                      if (_editing && p['id'] != null) await context.read<AppState>().api.delete('/listings/${_i['id']}/photos/${p['id']}');
+                      setState(() => _photos.remove(p));
+                    },
+                    child: const CircleAvatar(radius: 11, backgroundColor: Colors.black54, child: Icon(Icons.close, size: 14, color: Colors.white)),
+                  )),
+                ]),
+              if (_photos.length < 10)
+                InkWell(
+                  onTap: () async {
+                    final url = await pickAndUpload(context);
+                    if (url == null || !mounted) return;
+                    if (_editing) {
+                      final r = await context.read<AppState>().api.post('/listings/${_i['id']}/photos', {'url': url});
+                      setState(() => _photos.add({'id': r['id'], 'url': url}));
+                    } else {
+                      setState(() => _photos.add({'url': url}));
+                    }
+                  },
+                  child: Container(
+                    width: 96, height: 72,
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFD9DDE8))),
+                    child: const Icon(Icons.add_a_photo_outlined, color: brand),
+                  ),
+                ),
             ]),
             _section('Pin the exact spot'),
             const Text('Tap the map to drop the pin on your space.', style: TextStyle(color: Colors.black54)),
@@ -368,7 +411,11 @@ class _AddListingState extends State<AddListing> {
             Text(policyText[_policy]!, style: const TextStyle(fontSize: 12, color: Colors.black54)),
             const SizedBox(height: 12),
             TextField(controller: _access, maxLines: 2, decoration: const InputDecoration(labelText: 'Access instructions (shown only after payment)')),
-            const SizedBox(height: 20),
+            if (!_editing) CheckboxListTile(
+              contentPadding: EdgeInsets.zero, value: _declared, onChanged: (v) => setState(() => _declared = v ?? false),
+              title: const Text('I confirm I own this space or have permission to let it (landlord, council, mortgage provider).'),
+            ),
+            const SizedBox(height: 12),
             FilledButton(onPressed: _busy ? null : _submit, child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Text(_editing ? 'Save changes' : 'Submit for approval')),
             const SizedBox(height: 30),
           ])),

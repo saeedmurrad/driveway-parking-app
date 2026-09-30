@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 /// Backend base URL. Override at build time:
 /// flutter build web --dart-define=API_URL=https://parkspace-api.onrender.com
@@ -14,6 +16,11 @@ class ApiException implements Exception {
 }
 
 typedef Json = Map<String, dynamic>;
+
+/// Uploaded files are served by the API (e.g. /uploads/abc.png); full URLs pass through.
+String mediaUrl(String path) => path.startsWith('http') ? path : '$apiUrl$path';
+
+MediaType _mediaType(String m) => MediaType.parse(m);
 
 class Api {
   String? token;
@@ -45,6 +52,40 @@ class Api {
   }
 
   Future<dynamic> get(String path, {Map<String, String>? query}) => _send('GET', path, query: query);
+
+  /// Raw text response (CSV statements).
+  Future<String> getText(String path, {Map<String, String>? query}) async {
+    final uri = Uri.parse('$apiUrl$path').replace(queryParameters: query);
+    try {
+      final res = await http.get(uri, headers: {if (token != null) 'authorization': 'Bearer $token'});
+      if (res.statusCode >= 400) {
+        final d = jsonDecode(res.body);
+        throw ApiException('${d['message'] ?? 'Something went wrong'}', res.statusCode);
+      }
+      return utf8.decode(res.bodyBytes);
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw ApiException('Cannot reach the server. Is the API running?', 0);
+    }
+  }
+
+  /// Uploads an image and returns its URL path.
+  Future<String> upload(Uint8List bytes, String filename, String mime) async {
+    final req = http.MultipartRequest('POST', Uri.parse('$apiUrl/uploads'))
+      ..headers['authorization'] = 'Bearer $token'
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename, contentType: _mediaType(mime)));
+    try {
+      final res = await http.Response.fromStream(await req.send());
+      final data = jsonDecode(res.body);
+      if (res.statusCode >= 400) throw ApiException('${data['message'] ?? 'Upload failed'}', res.statusCode);
+      return data['url'];
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw ApiException('Upload failed. Is the API running?', 0);
+    }
+  }
   Future<dynamic> post(String path, [Object? body]) => _send('POST', path, body: body);
   Future<dynamic> put(String path, Object body) => _send('PUT', path, body: body);
   Future<dynamic> patch(String path, Object body) => _send('PATCH', path, body: body);

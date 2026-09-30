@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../api.dart';
+import '../download.dart';
 import '../state.dart';
 import '../ui.dart';
 
@@ -59,6 +60,41 @@ class HostEarnings extends StatelessWidget {
               }),
               const SizedBox(height: 10),
               const Text('You keep 80% of every booking. After a booking ends, earnings are pending until the dispute window passes, then become available.', style: TextStyle(fontSize: 12, color: Colors.black45)),
+              const SizedBox(height: 20),
+              if (num_(s['frozen']) > 0) Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFFFFE3D1), borderRadius: BorderRadius.circular(12)),
+                child: Row(children: [
+                  const Icon(Icons.gavel, color: Color(0xFFB34700)), const SizedBox(width: 10),
+                  Expanded(child: Text('${money(s['frozen'])} is on hold while a reported problem is reviewed.', style: const TextStyle(color: Color(0xFFB34700), fontWeight: FontWeight.w600))),
+                ]),
+              ),
+              Row(children: [
+                const Expanded(child: Text('Statements', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.download, size: 18), label: const Text('This month (CSV)'),
+                  onPressed: () async {
+                    try {
+                      final now = DateTime.now();
+                      final csv = await api.getText('/me/statement.csv', query: {'role': 'host', 'month': '${now.year}-${now.month.toString().padLeft(2, '0')}'});
+                      final real = await downloadText('parkspace-earnings-${now.year}-${now.month}.csv', csv);
+                      if (context.mounted) toast(context, real ? 'Statement downloaded' : 'Statement copied to clipboard');
+                    } on ApiException catch (e) {
+                      if (context.mounted) toast(context, e.message, error: true);
+                    }
+                  },
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () async {
+                    final csv = await api.getText('/me/statement.csv', query: {'role': 'host'});
+                    final real = await downloadText('parkspace-earnings-all.csv', csv);
+                    if (context.mounted) toast(context, real ? 'Statement downloaded' : 'Statement copied to clipboard');
+                  },
+                  child: const Text('All time'),
+                ),
+              ]),
               const SizedBox(height: 20),
               const Text('Payout history', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
               const SizedBox(height: 8),

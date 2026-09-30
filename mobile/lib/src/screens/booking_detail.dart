@@ -1,10 +1,14 @@
+// ignore_for_file: use_build_context_synchronously
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api.dart';
 import '../state.dart';
 import '../ui.dart';
+import 'booking_tools.dart';
+import 'space_detail.dart';
 
 class BookingDetail extends StatefulWidget {
   const BookingDetail({super.key, required this.bookingId, this.justBooked = false});
@@ -55,6 +59,44 @@ class _BookingDetailState extends State<BookingDetail> {
       if (mounted) {
         setState(() => _b = Map<String, dynamic>.from(b));
         toast(context, done);
+      }
+    } on ApiException catch (e) {
+      if (mounted) toast(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// "I've parked": records the time + phone GPS (warns if ~200 m+ away) and an optional photo of the car.
+  Future<void> _parkFlow() async {
+    String? photo;
+    final addPhoto = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text("I've parked"),
+        content: const Text("Take a quick photo of your parked car? It helps if there is ever a damage dispute. You can skip this."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Skip')),
+          FilledButton.icon(onPressed: () => Navigator.pop(c, true), icon: const Icon(Icons.photo_camera_outlined), label: const Text('Add photo')),
+        ],
+      ),
+    );
+    if (addPhoto == true && mounted) photo = await pickAndUpload(context, source: ImageSource.camera);
+    if (!mounted) return;
+    setState(() => _busy = true);
+    final pos = await tryLocate();
+    try {
+      final b = await context.read<AppState>().api.post('/bookings/${widget.bookingId}/parked', {
+        if (pos != null) 'latitude': pos.latitude,
+        if (pos != null) 'longitude': pos.longitude,
+        'photoUrl': ?photo,
+      });
+      if (!mounted) return;
+      setState(() => _b = Map<String, dynamic>.from(b));
+      if (b['far_from_space'] == true) {
+        toast(context, 'Saved, but you seem to be ${(num_(b['parked_distance_m']) / 1000).toStringAsFixed(1)} km from the space. Check you are at the right address.', error: true);
+      } else {
+        toast(context, pos == null ? 'Timestamp saved, enjoy your stay' : 'Timestamp and location saved, enjoy your stay');
       }
     } on ApiException catch (e) {
       if (mounted) toast(context, e.message, error: true);
@@ -118,7 +160,29 @@ class _BookingDetailState extends State<BookingDetail> {
   Widget build(BuildContext context) {
     final b = _b;
     return Scaffold(
-      appBar: AppBar(title: Text(b == null ? 'Booking' : 'Booking ${b['reference']}')),
+      appBar: AppBar(
+        title: Text(b == null ? 'Booking' : 'Booking ${b['reference']}'),
+        actions: [
+          if (b != null && b['viewer'] != 'admin')
+            PopupMenuButton<String>(
+              onSelected: (v) async {
+                if (v == 'block') {
+                  final other = b['viewer'] == 'driver' ? b['host_id'] : b['driver_id'];
+                  final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+                    title: const Text('Block this user?'),
+                    content: const Text('You will not be able to book, offer or message each other again.'),
+                    actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Block'))],
+                  ));
+                  if (ok == true && mounted) {
+                    await context.read<AppState>().api.post('/me/block', {'userId': other});
+                    if (mounted) toast(context, 'User blocked');
+                  }
+                }
+              },
+              itemBuilder: (_) => const [PopupMenuItem(value: 'block', child: Text('Block this user'))],
+            ),
+        ],
+      ),
       body: b == null
           ? (_error != null ? EmptyState(Icons.error_outline, 'Could not load booking', subtitle: _error) : const Center(child: CircularProgressIndicator()))
           : RefreshIndicator(onRefresh: _load, child: _content(context, b)),
@@ -158,7 +222,7 @@ class _BookingDetailState extends State<BookingDetail> {
               Row(children: [const Icon(Icons.directions_car, size: 18, color: Colors.black54), const SizedBox(width: 8), Text('${b['plate']}${b['make'] != null ? ' · ${b['make']} ${b['model'] ?? ''}' : ''}')]),
             ],
             const SizedBox(height: 6),
-            Row(children: [const Icon(Icons.person_outline, size: 18, color: Colors.black54), const SizedBox(width: 8), Text(isDriver ? 'Host: ${b['host_name']}' : 'Driver: ${b['driver_name']}')]),
+            Row(children: [const Icon(Icons.person_outline, size: 18, color: Colors.black54), const SizedBox(width: 8), Text(isDriver ? 'Host: ${b['host_name']}' : 'Driver: ${b['driver_name']}'), if (!isDriver && b['driver_rating'] != null) ...[const SizedBox(width: 8), Stars(b['driver_rating'])]]),
             if (status == 'cancelled' && b['cancel_reason'] != null)
               Padding(padding: const EdgeInsets.only(top: 8), child: Text('Cancelled by ${b['cancelled_by']} · ${b['cancel_reason']}', style: TextStyle(color: Colors.red.shade700))),
           ]))),
@@ -200,6 +264,42 @@ class _BookingDetailState extends State<BookingDetail> {
               _kv('Your earnings', money(b['host_earnings']), bold: true),
             ],
           ]))),
+          if (paid && b['viewer'] != 'admin') ...[
+            const SizedBox(height: 12),
+            ChatCard(key: ValueKey('chat-${b['id']}'), bookingId: b['id'], canSend: status != 'cancelled', myRole: b['viewer']),
+          ],
+          if ((b['disputes'] as List).isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Row(children: [Icon(Icons.gavel, size: 18), SizedBox(width: 8), Text('Reported problems', style: TextStyle(fontWeight: FontWeight.w700))]),
+              const SizedBox(height: 8),
+              for (final d in (b['disputes'] as List).cast<Map>())
+                Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
+                  Expanded(child: Text('${problemTypes[d['type']] ?? d['type']}${d['resolution'] != null ? '\n${d['resolution']}' : ''}')),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(color: d['status'] == 'resolved' ? const Color(0xFFD9F5E3) : const Color(0xFFFFF0C9), borderRadius: BorderRadius.circular(20)),
+                    child: Text(d['status'] == 'resolved' ? 'Resolved' : d['status'] == 'in_review' ? 'In review' : 'Open', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: d['status'] == 'resolved' ? const Color(0xFF136C37) : const Color(0xFF8A5B00))),
+                  ),
+                ])),
+            ]))),
+          ],
+          if (paid && b['viewer'] != 'admin') ...[
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(icon: const Icon(Icons.receipt_long_outlined), label: Text(isDriver ? 'Receipt' : 'Earnings statement'), onPressed: () => showReceipt(context, b['id'])),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.flag_outlined), label: const Text('Report a problem'),
+                onPressed: () async { if (await showReportProblem(context, b) && mounted) _load(); },
+              ),
+              if (isDriver && ['completed', 'cancelled'].contains(status))
+                OutlinedButton.icon(icon: const Icon(Icons.replay), label: const Text('Book again'), onPressed: () {
+                  final dur = dt(b['booked_end']).difference(dt(b['booked_start']));
+                  final start = DateTime.now().add(const Duration(minutes: 5));
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => SpaceDetail(listingId: b['listing_id'], start: start, end: start.add(dur))));
+                }),
+            ]),
+          ],
           const SizedBox(height: 12),
           Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Timeline', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -290,7 +390,7 @@ class _BookingDetailState extends State<BookingDetail> {
       children.add(FilledButton.icon(
         icon: const Icon(Icons.local_parking),
         label: Text(canPark ? "I've parked" : "I've parked (from ${fmtTime(start.subtract(const Duration(minutes: 15)))})"),
-        onPressed: canPark && !_busy ? () => _act('parked', 'Timestamp saved, enjoy your stay', body: {}) : null,
+        onPressed: canPark && !_busy ? _parkFlow : null,
       ));
     }
     if (isDriver && (status == 'parked' || status == 'overstay')) {

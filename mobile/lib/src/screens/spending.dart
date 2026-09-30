@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state.dart';
+import '../api.dart';
+import '../download.dart';
 import '../ui.dart';
 import 'driver_bookings.dart';
 
@@ -37,7 +39,21 @@ class SpendingScreen extends StatelessWidget {
                 ]);
               }),
               const SizedBox(height: 20),
-              const Text('Receipts', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              Row(children: [
+                const Expanded(child: Text('Receipts', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.download, size: 18), label: const Text('Statement (CSV)'),
+                  onPressed: () async {
+                    try {
+                      final csv = await api.getText('/me/statement.csv', query: {'role': 'driver'});
+                      final real = await downloadText('parkspace-spending.csv', csv);
+                      if (context.mounted) toast(context, real ? 'Statement downloaded' : 'Statement copied to clipboard');
+                    } on ApiException catch (e) {
+                      if (context.mounted) toast(context, e.message, error: true);
+                    }
+                  },
+                ),
+              ]),
               const SizedBox(height: 8),
               if (paid.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No payments yet')))
               else for (final b in paid) Padding(padding: const EdgeInsets.only(bottom: 8), child: BookingCard(b: b, host: false, onChanged: reload)),

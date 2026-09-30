@@ -122,7 +122,7 @@ class _OfferCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(fmtRange(o['start_at'], o['end_at'])),
           const SizedBox(height: 4),
-          Text(host ? 'Driver: ${o['driver_name']}' : 'Host: ${o['host_name']}', style: const TextStyle(color: Colors.black54, fontSize: 13)),
+          Row(children: [Text(host ? 'Driver: ${o['driver_name']}' : 'Host: ${o['host_name']}', style: const TextStyle(color: Colors.black54, fontSize: 13)), if (host && o['driver_rating'] != null) ...[const SizedBox(width: 6), Stars(o['driver_rating'], size: 14)]]),
           const SizedBox(height: 8),
           Row(children: [
             Text(money(o['amount']), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 20)),
