@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { DbService } from '../db/db.service';
 import { AdminGuard } from '../auth/auth.guard';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -63,5 +63,25 @@ export class AdminController {
     if (!range || isNaN(n) || n < range[0] || n > range[1]) throw new BadRequestException(`Invalid value for ${d.key}`);
     await this.db.query('update settings set value = $2 where key = $1', [d.key, String(n)]);
     return { key: d.key, value: String(n) };
+  }
+
+  @Get('extra-types') async extraTypes() {
+    return (await this.db.query('select id, name, description, allowed_price_units, ev_only, active from extra_types order by name')).rows;
+  }
+
+  @Post('extra-types') async addExtraType(@Body() d: { name: string; description?: string; allowedPriceUnits?: string[]; evOnly?: boolean }) {
+    if (!d.name?.trim()) throw new BadRequestException('Name is required');
+    const units = (d.allowedPriceUnits?.length ? d.allowedPriceUnits : ['per_booking']).filter((u) => ['per_booking', 'per_hour', 'per_day', 'per_kwh'].includes(u));
+    return (await this.db.query(
+      'insert into extra_types (name, description, allowed_price_units, ev_only) values ($1,$2,$3,$4) returning *',
+      [d.name.trim(), d.description ?? null, units, !!d.evOnly])).rows[0];
+  }
+
+  @Patch('extra-types/:id') async patchExtraType(@Param('id') id: string, @Body() d: { active?: boolean; name?: string; description?: string }) {
+    const { rows } = await this.db.query(
+      `update extra_types set active = coalesce($2, active), name = coalesce($3, name), description = coalesce($4, description)
+       where id = $1 returning *`, [id, d.active ?? null, d.name ?? null, d.description ?? null]);
+    if (!rows[0]) throw new NotFoundException();
+    return rows[0];
   }
 }

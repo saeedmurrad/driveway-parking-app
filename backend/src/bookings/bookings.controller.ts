@@ -1,14 +1,17 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsArray, IsBoolean, IsDateString, ValidateNested, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 import { AuthUser } from '../auth/auth.service';
 import { AuthGuard, CurrentUser } from '../auth/auth.guard';
 import { BookingsService } from './bookings.service';
 
+class ExtraDto { @IsUUID() id: string; @IsOptional() @IsInt() @Min(1) @Max(200) quantity?: number; }
 class CreateBookingDto {
   @IsUUID() listingId: string;
   @IsOptional() @IsUUID() vehicleId?: string;
   @IsDateString() start: string;
   @IsDateString() end: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ExtraDto) extras?: ExtraDto[];
 }
 class GeoDto {
   @IsOptional() @IsNumber() latitude?: number;

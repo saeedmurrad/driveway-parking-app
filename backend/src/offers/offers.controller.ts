@@ -1,9 +1,11 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
-import { IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsArray, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateNested } from 'class-validator';
 import { AuthGuard, CurrentUser } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.service';
 import { OffersService } from './offers.service';
 
+class OfferExtraDto { @IsUUID() id: string; @IsOptional() @IsInt() @Min(1) quantity?: number; }
 class CreateOfferDto {
   @IsUUID() listingId: string;
   @IsOptional() @IsUUID() vehicleId?: string;
@@ -11,6 +13,7 @@ class CreateOfferDto {
   @IsDateString() end: string;
   @IsNumber() @Min(0.01) amount: number;
   @IsOptional() @IsString() @MaxLength(200) message?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => OfferExtraDto) extras?: OfferExtraDto[];
 }
 class RespondDto {
   @IsIn(['accept', 'decline', 'counter']) action: 'accept' | 'decline' | 'counter';

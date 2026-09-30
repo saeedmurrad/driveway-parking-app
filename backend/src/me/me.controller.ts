@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 import { DbService } from '../db/db.service';
 import { AuthService, AuthUser } from '../auth/auth.service';
 import { AuthGuard, CurrentUser } from '../auth/auth.guard';
@@ -12,6 +12,8 @@ class VehicleDto {
   @IsOptional() @IsString() make?: string;
   @IsOptional() @IsString() model?: string;
   @IsIn(['small', 'medium', 'large', 'van']) size: string;
+  @IsOptional() @IsBoolean() isEv?: boolean;
+  @IsOptional() @IsIn(['type2', 'ccs', 'chademo']) evConnector?: string;
 }
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -35,8 +37,8 @@ export class MeController {
 
   @Post('vehicles') async addVehicle(@CurrentUser() u: AuthUser, @Body() d: VehicleDto) {
     return (await this.db.query(
-      `insert into vehicles (user_id, plate, make, model, size) values ($1, upper($2), $3, $4, $5) returning *`,
-      [u.id, d.plate, d.make ?? null, d.model ?? null, d.size])).rows[0];
+      `insert into vehicles (user_id, plate, make, model, size, is_ev, ev_connector) values ($1, upper($2), $3, $4, $5, $6, $7) returning *`,
+      [u.id, d.plate, d.make ?? null, d.model ?? null, d.size, !!d.isEv, d.isEv ? d.evConnector ?? 'type2' : null])).rows[0];
   }
 
   @Post('become-host') async becomeHost(@CurrentUser() u: AuthUser) {

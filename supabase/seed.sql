@@ -5,8 +5,9 @@ insert into users (id, name, email, password_hash, is_driver, is_host, is_admin,
   ('00000000-0000-4000-8000-000000000003','Ada Admin','admin@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, false, true, 'verified'),
   ('00000000-0000-4000-8000-000000000004','Omar Khan','omar@demo.parkspace.test', crypt('demo1234', gen_salt('bf')), true, true, false, 'verified');
 
-insert into vehicles (user_id, plate, make, model, colour, size) values
-  ('00000000-0000-4000-8000-000000000002','AB12 CDE','Ford','Focus','Blue','medium');
+insert into vehicles (user_id, plate, make, model, colour, size, is_ev, ev_connector) values
+  ('00000000-0000-4000-8000-000000000002','AB12 CDE','Ford','Focus','Blue','medium', false, null),
+  ('00000000-0000-4000-8000-000000000002','EV21 KWH','Tesla','Model 3','White','medium', true, 'type2');
 
 insert into listings (id, host_id, title, address, postcode, latitude, longitude, space_type, max_vehicle_size,
                       features, access_instructions, price_hour, price_day, cancellation_policy, rating, status) values
@@ -27,6 +28,21 @@ update listings set booking_mode = 'request' where id = '10000000-0000-4000-8000
 -- Bloomsbury bay is only available Mon-Fri 07:00-19:00 (UK time).
 insert into availability_rules (listing_id, day_of_week, start_time, end_time)
   select '10000000-0000-4000-8000-000000000003', d, '07:00', '19:00' from generate_series(1, 5) d;
+
+-- Paid extras offered by hosts.
+insert into listing_extras (listing_id, extra_type_id, price, price_unit, details)
+  select l.id, t.id, x.price, x.unit, x.details::jsonb
+  from (values
+    ('10000000-0000-4000-8000-000000000001', 'CCTV surveillance', 1.50, 'per_booking', null),
+    ('10000000-0000-4000-8000-000000000002', 'CCTV surveillance', 2.00, 'per_booking', null),
+    ('10000000-0000-4000-8000-000000000002', 'Car wash / valet', 8.00, 'per_booking', null),
+    ('10000000-0000-4000-8000-000000000004', 'EV charging', 0.45, 'per_kwh', '{"connector":"type2","kw":7}'),
+    ('10000000-0000-4000-8000-000000000005', 'CCTV surveillance', 1.00, 'per_day', null),
+    ('10000000-0000-4000-8000-000000000007', 'CCTV surveillance', 1.50, 'per_day', null),
+    ('10000000-0000-4000-8000-000000000007', 'Car wash / valet', 9.00, 'per_booking', null)
+  ) as x(listing, type, price, unit, details)
+  join listings l on l.id = x.listing::uuid
+  join extra_types t on t.name = x.type;
 
 -- Booking history so dashboards look alive: completed past bookings (driver Dan).
 do $$

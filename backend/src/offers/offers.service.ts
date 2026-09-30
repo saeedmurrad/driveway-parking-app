@@ -36,7 +36,7 @@ export class OffersService {
     return r.rows[0].open && r.rows[0].free;
   }
 
-  async create(driverId: string, d: { listingId: string; vehicleId?: string; start: string; end: string; amount: number; message?: string }) {
+  async create(driverId: string, d: { listingId: string; vehicleId?: string; start: string; end: string; amount: number; message?: string; extras?: { id: string; quantity?: number }[] }) {
     const start = new Date(d.start), end = new Date(d.end);
     if (!(end > start) || start.getTime() < Date.now() - 10 * 60_000) throw new BadRequestException('Invalid stay times');
     if (d.message && containsContactInfo(d.message)) throw new BadRequestException(SAFETY);
@@ -48,8 +48,7 @@ export class OffersService {
     if (l.host_id === driverId) throw new BadRequestException('You cannot make an offer on your own space');
     if (!(await this.slotFree(l.id, start, end, l.buffer_minutes))) throw new ConflictException('That time is no longer available');
 
-    const rate = await this.settings.getNumber('commission_rate');
-    const quote = calculatePrice({ start, end, priceHour: Number(l.price_hour), priceDay: l.price_day == null ? null : Number(l.price_day), commissionRate: rate });
+    const quote = await this.bookings.quote(l.id, start, end, d.extras, d.vehicleId);
     const amount = r2(d.amount);
     if (!(amount > 0)) throw new BadRequestException('Enter an offer amount');
     if (amount >= quote.total) throw new BadRequestException(`Your offer is at or above the listed price (£${quote.total.toFixed(2)}). Just book it!`);
@@ -58,10 +57,10 @@ export class OffersService {
     const id = randomUUID();
     const belowMin = l.min_offer_price != null && amount / hours < Number(l.min_offer_price);
     const offer = (await this.db.query(
-      `insert into offers (id, thread_id, listing_id, driver_id, vehicle_id, start_at, end_at, amount, round, sent_by, status, expires_at, message, decline_reason)
-       values ($1,$1,$2,$3,$4,$5,$6,$7,1,'driver',$8,$9,$10,$11) returning *`,
+      `insert into offers (id, thread_id, listing_id, driver_id, vehicle_id, start_at, end_at, amount, round, sent_by, status, expires_at, message, decline_reason, extras)
+       values ($1,$1,$2,$3,$4,$5,$6,$7,1,'driver',$8,$9,$10,$11,$12) returning *`,
       [id, l.id, driverId, d.vehicleId ?? null, start, end, amount, belowMin ? 'declined' : 'open',
-       this.expiry(start), d.message ?? null, belowMin ? 'below_minimum' : null])).rows[0];
+       this.expiry(start), d.message ?? null, belowMin ? 'below_minimum' : null, d.extras?.length ? JSON.stringify(d.extras) : null])).rows[0];
 
     if (belowMin) {
       await this.notes.notify(driverId, 'offer_declined', 'Offer declined',
@@ -81,9 +80,8 @@ export class OffersService {
     return o;
   }
 
-  private async quoteFor(o: any) {
-    const rate = await this.settings.getNumber('commission_rate');
-    return calculatePrice({ start: new Date(o.start_at), end: new Date(o.end_at), priceHour: Number(o.price_hour), priceDay: o.price_day == null ? null : Number(o.price_day), commissionRate: rate });
+  private quoteFor(o: any) {
+    return this.bookings.quote(o.listing_id, new Date(o.start_at), new Date(o.end_at), o.extras ?? undefined, o.vehicle_id);
   }
 
   async respond(userId: string, offerId: string, action: 'accept' | 'decline' | 'counter', amount?: number, message?: string) {
@@ -149,7 +147,7 @@ export class OffersService {
     }
     const created = await this.bookings.create(driverId, {
       listingId: o.listing_id, vehicleId: o.vehicle_id ?? undefined,
-      start: new Date(o.start_at).toISOString(), end: new Date(o.end_at).toISOString(),
+      start: new Date(o.start_at).toISOString(), end: new Date(o.end_at).toISOString(), extras: o.extras ?? undefined,
     }, { offerId, amount: Number(o.amount) });
     const booking = await this.bookings.pay(driverId, created.booking.id, true);
     await this.db.query(`update offers set status = 'paid' where id = $1`, [offerId]);
@@ -165,20 +163,19 @@ export class OffersService {
        join users du on du.id = o.driver_id join users hu on hu.id = l.host_id
        where o.driver_id = $1 or l.host_id = $1
        order by o.thread_id, o.round desc`, [userId]);
-    const rate = await this.settings.getNumber('commission_rate');
-    return rows
-      .map((o) => {
-        const role = o.host_id === userId ? 'host' : 'driver';
-        const live = o.status === 'open' || o.status === 'accepted';
-        const expired = (o.status === 'open' && new Date(o.expires_at) < new Date()) || (o.status === 'accepted' && new Date(o.pay_by) < new Date());
-        const status = expired ? 'expired' : o.status;
-        return {
-          ...o, status, role, listed_total: calculatePrice({ start: new Date(o.start_at), end: new Date(o.end_at), priceHour: Number(o.price_hour), priceDay: o.price_day == null ? null : Number(o.price_day), commissionRate: rate }).total,
-          awaiting_me: !expired && ((o.status === 'open' && o.sent_by !== role) || (o.status === 'accepted' && role === 'driver')),
-          live: live && !expired,
-        };
-      })
-      .sort((a, b) => Number(b.awaiting_me) - Number(a.awaiting_me) || +new Date(b.created_at) - +new Date(a.created_at));
+    const out = [];
+    for (const o of rows) {
+      const role = o.host_id === userId ? 'host' : 'driver';
+      const live = o.status === 'open' || o.status === 'accepted';
+      const expired = (o.status === 'open' && new Date(o.expires_at) < new Date()) || (o.status === 'accepted' && new Date(o.pay_by) < new Date());
+      const status = expired ? 'expired' : o.status;
+      out.push({
+        ...o, status, role, listed_total: (await this.quoteFor(o)).total,
+        awaiting_me: !expired && ((o.status === 'open' && o.sent_by !== role) || (o.status === 'accepted' && role === 'driver')),
+        live: live && !expired,
+      });
+    }
+    return out.sort((a, b) => Number(b.awaiting_me) - Number(a.awaiting_me) || +new Date(b.created_at) - +new Date(a.created_at));
   }
 
   async thread(userId: string, threadId: string) {
@@ -193,7 +190,7 @@ export class OffersService {
     const q = await this.quoteFor(last);
     const expired = (last.status === 'open' && new Date(last.expires_at) < new Date()) || (last.status === 'accepted' && new Date(last.pay_by) < new Date());
     return {
-      role, listing_id: last.listing_id, title: last.title, listed_total: q.total,
+      role, listing_id: last.listing_id, title: last.title, listed_total: q.total, extras: q.extras,
       start_at: last.start_at, end_at: last.end_at, driver_name: last.driver_name, host_name: last.host_name,
       current: { ...last, status: expired ? 'expired' : last.status },
       can_respond: !expired && last.status === 'open' && last.sent_by !== role,

@@ -41,6 +41,16 @@ class RuleDto {
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) start: string;
   @Matches(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/) end: string;
 }
+class ListingExtraDto {
+  @IsString() extraTypeId: string;
+  @IsNumber() @Min(0) @Max(500) price: number;
+  @IsIn(['per_booking', 'per_hour', 'per_day', 'per_kwh']) priceUnit: string;
+  @IsOptional() details?: Record<string, unknown>;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+class ExtrasDto {
+  @IsArray() extras: ListingExtraDto[];
+}
 class AvailabilityDto {
   @IsBoolean() always: boolean;
   @IsOptional() @IsArray() rules?: RuleDto[];
@@ -52,6 +62,15 @@ class BlockDto {
 }
 
 // camelCase DTO key -> column
+/** "id:qty,id" -> [{id, quantity}] */
+export function parseExtras(raw?: string): { id: string; quantity?: number }[] {
+  if (!raw) return [];
+  return raw.split(',').filter(Boolean).map((p) => {
+    const [id, q] = p.split(':');
+    return { id, quantity: q ? Number(q) : undefined };
+  });
+}
+
 const COLS: Record<string, string> = {
   title: 'title', address: 'address', postcode: 'postcode', latitude: 'latitude', longitude: 'longitude',
   spaceType: 'space_type', maxVehicleSize: 'max_vehicle_size', priceHour: 'price_hour', priceDay: 'price_day',
@@ -91,7 +110,7 @@ export class ListingsController {
 
   /** Public detail. Exact address + access instructions are released only with a paid booking. */
   @Get(':id')
-  async one(@Param('id') id: string, @Query('start') start?: string, @Query('end') end?: string) {
+  async one(@Param('id') id: string, @Query('start') start?: string, @Query('end') end?: string, @Query('extras') extras?: string, @Query('vehicleId') vehicleId?: string) {
     const { rows } = await this.db.query(
       `select l.id, l.title, l.latitude, l.longitude, l.postcode, l.space_type, l.max_vehicle_size, l.features,
               l.price_hour, l.price_day, l.cancellation_policy, l.booking_mode, l.allow_offers, l.rating, l.status,
@@ -104,7 +123,11 @@ export class ListingsController {
       `select r.stars, r.comment, r.created_at, split_part(u.name,' ',1) as name
        from reviews r join users u on u.id = r.from_user_id where r.listing_id = $1 order by r.created_at desc limit 5`, [id])).rows;
     const out: any = { ...rows[0], reviews };
-    if (start && end) out.quote = await this.bookings.quote(id, new Date(start), new Date(end));
+    out.extras = (await this.db.query(
+      `select le.id, et.name, et.description, le.price, le.price_unit, le.details, et.ev_only
+       from listing_extras le join extra_types et on et.id = le.extra_type_id
+       where le.listing_id = $1 and le.active and et.active order by et.name`, [id])).rows;
+    if (start && end) out.quote = await this.bookings.quote(id, new Date(start), new Date(end), parseExtras(extras), vehicleId);
     return out;
   }
 
@@ -196,6 +219,40 @@ export class ListingsController {
   async removeBlock(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('blockId') blockId: string) {
     await this.owned(u, id);
     await this.db.query('delete from availability_blocks where id = $1 and listing_id = $2', [blockId, id]);
+    return { ok: true };
+  }
+
+  @Get(':id/extras') @UseGuards(AuthGuard)
+  async listExtras(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    await this.owned(u, id);
+    return (await this.db.query(
+      `select le.id, le.extra_type_id, et.name, le.price, le.price_unit, le.details, le.active
+       from listing_extras le join extra_types et on et.id = le.extra_type_id where le.listing_id = $1`, [id])).rows;
+  }
+
+  @Put(':id/extras') @UseGuards(AuthGuard)
+  async setExtras(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: ExtrasDto) {
+    await this.owned(u, id);
+    const types = (await this.db.query('select id, allowed_price_units from extra_types where active')).rows;
+    for (const e of d.extras) {
+      const t = types.find((x) => x.id === e.extraTypeId);
+      if (!t) throw new BadRequestException('Unknown extra type');
+      if (!t.allowed_price_units.includes(e.priceUnit)) throw new BadRequestException(`That extra cannot be priced ${e.priceUnit.replace('_', ' ')}`);
+    }
+    // Keep ids stable for extras already on past bookings: upsert by (listing, type), deactivate the rest.
+    await this.db.tx(async (c) => {
+      await c.query('update listing_extras set active = false where listing_id = $1', [id]);
+      for (const e of d.extras) {
+        const ex = await c.query('select id from listing_extras where listing_id = $1 and extra_type_id = $2 order by active desc limit 1', [id, e.extraTypeId]);
+        if (ex.rowCount) {
+          await c.query('update listing_extras set price = $2, price_unit = $3, details = $4, active = $5 where id = $1',
+            [ex.rows[0].id, e.price, e.priceUnit, e.details ?? null, e.active !== false]);
+        } else {
+          await c.query('insert into listing_extras (listing_id, extra_type_id, price, price_unit, details, active) values ($1,$2,$3,$4,$5,$6)',
+            [id, e.extraTypeId, e.price, e.priceUnit, e.details ?? null, e.active !== false]);
+        }
+      }
+    });
     return { ok: true };
   }
 }

@@ -8,6 +8,7 @@ import { BookingsModule } from './bookings/bookings.module';
 import { AuthModule } from './auth/auth.module';
 import { MeModule } from './me/me.module';
 import { AdminModule } from './admin/admin.module';
+import { ExtrasModule } from './extras/extras.module';
 import { OffersModule } from './offers/offers.module';
 import { NotificationsModule } from './notifications/notifications.module';
 
@@ -23,6 +24,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     AdminModule,
     NotificationsModule,
     OffersModule,
+    ExtrasModule,
   ],
   controllers: [HealthController],
 })

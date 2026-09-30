@@ -81,8 +81,12 @@ def reset():
       delete from transactions where booking_id in (select id from bookings where reference not like 'PS-SEED%') or type = 'payout';
       delete from booking_events where booking_id in (select id from bookings where reference not like 'PS-SEED%');
       delete from reviews where booking_id in (select id from bookings where reference not like 'PS-SEED%');
+      delete from booking_extras where booking_id in (select id from bookings where reference not like 'PS-SEED%');
       delete from bookings where reference not like 'PS-SEED%';
       delete from offers;
+      delete from extra_types where name like 'E2E %';
+      delete from vehicles where plate like 'E2E%';
+      update listing_extras set price = 1.50, price_unit = 'per_booking', active = true where listing_id = '10000000-0000-4000-8000-000000000001';
       delete from payouts; delete from availability_blocks;
       delete from availability_rules where listing_id <> '10000000-0000-4000-8000-000000000003';
       update listings set cancellation_policy = 'strict' where id = '10000000-0000-4000-8000-000000000005';
@@ -429,6 +433,65 @@ check("host declines an offer", r["current"]["status"] == "declined")
 s, o5 = offer(D, ids["shoreditch"], now + timedelta(days=54), 3.0)
 psql(f"update offers set expires_at = now() - interval '1 minute' where id='{o5['offer']['id']}'")
 check("open offer expires automatically", wait_for(lambda: psql(f"select status from offers where id='{o5['offer']['id']}'") == "expired", 45))
+
+print("Paid extras")
+def extras_of(listing):
+    return {e["name"]: e for e in call("GET", f"/listings/{listing}", token=D)[1]["extras"]}
+kx_x = extras_of(ids["kx"])
+check("listing detail lists its extras", "CCTV surveillance" in kx_x and float(kx_x["CCTV surveillance"]["price"]) == 1.5)
+e_start = now + timedelta(days=60)
+qs = f"start={iso(e_start)}&end={iso(e_start + timedelta(hours=2))}&extras={kx_x['CCTV surveillance']['id']}"
+s, q = call("GET", f"/listings/{ids['kx']}?{qs}", token=D)
+check("quote includes the extra (5.00 + 1.50 = 6.50)", float(q["quote"]["total"]) == 6.5 and float(q["quote"]["extras"][0]["line_total"]) == 1.5, q.get("quote"))
+s, r = book(D, ids["kx"], e_start, extras=[{"id": kx_x["CCTV surveillance"]["id"]}])
+check("booking with extra: total 6.50, commission 1.30 (20% incl. extras), host 5.20",
+      float(r["total_amount"]) == 6.5 and float(r["extras_amount"]) == 1.5 and float(r["commission_amount"]) == 1.3 and float(r["host_earnings"]) == 5.2, r)
+check("booking shows its extra lines", [x["name"] for x in r["extras"]] == ["CCTV surveillance"] and float(r["extras"][0]["line_total"]) == 1.5)
+check("extra price is frozen on the booking", psql(f"select price from booking_extras where booking_id='{r['id']}'") == "1.50")
+s, bad = book(D, ids["kx"], e_start + timedelta(days=1), pay=False, extras=[{"id": "99999999-9999-4999-8999-999999999999"}])
+check("unknown extra rejected", s == 400, (s, bad))
+
+cam_x = extras_of(ids["camden"])
+ev_extra = cam_x["EV charging"]["id"]
+vehicles = call("GET", "/me/vehicles", token=D)[1]
+plain = next(v for v in vehicles if not v["is_ev"])
+ev = next(v for v in vehicles if v["is_ev"])
+s, bad = book(D, ids["camden"], e_start, pay=False, vehicleId=plain["id"], extras=[{"id": ev_extra, "quantity": 20}])
+check("EV charging refused for a non-EV vehicle", s == 400 and "electric" in bad["message"], (s, bad))
+s, ccs = call("POST", "/me/vehicles", {"plate": "E2E CCS1", "size": "medium", "isEv": True, "evConnector": "ccs"}, D)
+s, bad = book(D, ids["camden"], e_start, pay=False, vehicleId=ccs["id"], extras=[{"id": ev_extra, "quantity": 20}])
+check("EV charging refused when the connector does not match", s == 400 and "connector" in bad["message"], (s, bad))
+s, r = book(D, ids["camden"], e_start, vehicleId=ev["id"], extras=[{"id": ev_extra, "quantity": 20}])
+check("EV charging per kWh: 6.40 parking + 20 x 0.45 = 15.40", s == 201 and float(r["total_amount"]) == 15.4 and r["extras"][0]["quantity"] == "20.00" or float(r["total_amount"]) == 15.4, (s, r.get("total_amount")))
+
+s, _ = call("PUT", f"/listings/{ids['kx']}/extras", {"extras": [{"extraTypeId": kx_x["CCTV surveillance"]["extra_type_id"] if "extra_type_id" in kx_x["CCTV surveillance"] else "", "price": 2, "priceUnit": "per_hour"}]}, H)
+check("an extra cannot use a price unit its type does not allow", s == 400)
+types = call("GET", "/extra-types", token=H)[1]
+cctv_t = next(t for t in types if t["name"] == "CCTV surveillance")
+s, _ = call("PUT", f"/listings/{ids['kx']}/extras", {"extras": [{"extraTypeId": cctv_t["id"], "price": 2.0, "priceUnit": "per_day"}]}, H)
+check("host updates extras and prices", s == 200 and float(extras_of(ids["kx"])["CCTV surveillance"]["price"]) == 2.0 and extras_of(ids["kx"])["CCTV surveillance"]["price_unit"] == "per_day")
+s, _ = call("PUT", f"/listings/{ids['kx']}/extras", {"extras": []}, OMAR)
+check("another host cannot edit my extras", s == 404)
+s, new_t = call("POST", "/admin/extra-types", {"name": "E2E Bike rack", "allowedPriceUnits": ["per_booking"]}, A)
+check("admin adds a new extra type without an app update", s == 201 and new_t["name"] == "E2E Bike rack")
+check("new type is offered to hosts", any(t["name"] == "E2E Bike rack" for t in call("GET", "/extra-types", token=H)[1]))
+call("PATCH", f"/admin/extra-types/{new_t['id']}", {"active": False}, A)
+check("deactivated type disappears", not any(t["name"] == "E2E Bike rack" for t in call("GET", "/extra-types", token=H)[1]))
+s, _ = call("POST", "/admin/extra-types", {"name": "x"}, D)
+check("drivers cannot manage extra types", s == 403)
+call("PUT", f"/listings/{ids['kx']}/extras", {"extras": [{"extraTypeId": cctv_t["id"], "price": 1.5, "priceUnit": "per_booking"}]}, H)
+
+# negotiated booking that includes an extra
+kx_x = extras_of(ids["kx"])
+n_start = now + timedelta(days=61)
+s, o = offer(D, ids["kx"], n_start, 5.0) if False else call("POST", "/offers", {"listingId": ids["kx"], "start": iso(n_start), "end": iso(n_start + timedelta(hours=2)), "amount": 5.0, "extras": [{"id": kx_x["CCTV surveillance"]["id"]}]}, D)
+check("offer can include extras (listed total 6.50)", s == 201 and o["listedTotal"] == 6.5, (s, o))
+call("POST", f"/offers/{o['offer']['id']}/respond", {"action": "accept"}, H)
+s, bk = call("POST", f"/offers/{o['offer']['id']}/pay", None, D)
+parts = float(bk["parking_amount"]) + float(bk["extras_amount"])
+lines = sum(float(x["line_total"]) for x in bk["extras"])
+check("negotiated total 5.00 keeps parking + extras consistent", s == 201 and float(bk["total_amount"]) == 5.0 and abs(parts - 5.0) < 0.011 and abs(lines - float(bk["extras_amount"])) < 0.02, (s, bk.get("parking_amount"), bk.get("extras_amount"), lines))
+check("commission on negotiated total with extras", float(bk["commission_amount"]) == 1.0)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

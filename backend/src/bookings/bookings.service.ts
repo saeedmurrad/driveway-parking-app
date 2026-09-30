@@ -3,7 +3,7 @@ import { PoolClient } from 'pg';
 import { randomBytes } from 'crypto';
 import { DbService } from '../db/db.service';
 import { SettingsService } from '../settings/settings.service';
-import { calculatePrice } from './pricing';
+import { calculatePrice, extraLineTotal } from './pricing';
 import { refundPercent } from './policy';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -19,17 +19,50 @@ export class BookingsService {
     private readonly notes: NotificationsService,
   ) {}
 
-  async quote(listingId: string, start: Date, end: Date) {
+  /** Resolves the chosen paid extras into priced lines. `vehicleId` (if given) enforces EV-only extras. */
+  async resolveExtras(
+    q: { query: (t: string, p?: unknown[]) => Promise<any> }, listingId: string,
+    input: { id: string; quantity?: number }[] | undefined | null, hours: number, vehicleId?: string | null,
+  ) {
+    if (!input?.length) return { lines: [] as any[], amount: 0 };
+    const ids = [...new Set(input.map((e) => e.id))];
+    const { rows } = await q.query(
+      `select le.id, le.price, le.price_unit, le.details, et.id as extra_type_id, et.name, et.ev_only
+       from listing_extras le join extra_types et on et.id = le.extra_type_id
+       where le.listing_id = $1 and le.id = any($2::uuid[]) and le.active and et.active`, [listingId, ids]);
+    if (rows.length !== ids.length) throw new BadRequestException('One of the extras is no longer available');
+    if (rows.some((r: any) => r.ev_only)) {
+      const v = vehicleId ? (await q.query('select is_ev, ev_connector from vehicles where id = $1', [vehicleId])).rows[0] : null;
+      for (const r of rows.filter((x: any) => x.ev_only)) {
+        if (!v?.is_ev) throw new BadRequestException(`${r.name} is only for electric vehicles. Add an EV to your profile.`);
+        const need = r.details?.connector;
+        if (need && v.ev_connector && need !== v.ev_connector) throw new BadRequestException(`${r.name} uses a ${need} connector, which does not match your vehicle.`);
+      }
+    }
+    const lines = rows.map((r: any) => {
+      const qty = input.find((e) => e.id === r.id)?.quantity;
+      const { quantity, total } = extraLineTotal({ price: Number(r.price), unit: r.price_unit, quantity: qty }, hours);
+      return { listing_extra_id: r.id, extra_type_id: r.extra_type_id, name: r.name, price: Number(r.price), price_unit: r.price_unit, quantity, line_total: total };
+    });
+    return { lines, amount: r2(lines.reduce((s: number, l: any) => s + l.line_total, 0)) };
+  }
+
+  async quote(listingId: string, start: Date, end: Date, extras?: { id: string; quantity?: number }[], vehicleId?: string | null) {
     const { rows } = await this.db.query('select price_hour, price_day from listings where id = $1', [listingId]);
     if (!rows[0]) throw new NotFoundException();
     const rate = await this.settings.getNumber('commission_rate');
-    return calculatePrice({
-      start, end, priceHour: Number(rows[0].price_hour),
-      priceDay: rows[0].price_day == null ? null : Number(rows[0].price_day), commissionRate: rate,
-    });
+    const hours = Math.ceil((end.getTime() - start.getTime()) / 3_600_000);
+    const ex = await this.resolveExtras(this.db, listingId, extras, hours, vehicleId);
+    return {
+      ...calculatePrice({
+        start, end, priceHour: Number(rows[0].price_hour),
+        priceDay: rows[0].price_day == null ? null : Number(rows[0].price_day), extrasAmount: ex.amount, commissionRate: rate,
+      }),
+      extras: ex.lines,
+    };
   }
 
-  async create(driverId: string, dto: { listingId: string; vehicleId?: string; start: string; end: string }, override?: { offerId: string; amount: number }) {
+  async create(driverId: string, dto: { listingId: string; vehicleId?: string; start: string; end: string; extras?: { id: string; quantity?: number }[] }, override?: { offerId: string; amount: number }) {
     const start = new Date(dto.start);
     const end = new Date(dto.end);
     if (!(end > start)) throw new BadRequestException('End must be after start');
@@ -49,14 +82,21 @@ export class BookingsService {
       if (mins < l.min_stay_minutes) throw new BadRequestException(`Minimum stay is ${l.min_stay_minutes} minutes`);
       if (mins > l.max_stay_minutes) throw new BadRequestException(`Maximum stay is ${Math.round(l.max_stay_minutes / 60)} hours`);
 
+      const hours = Math.ceil(mins / 60);
+      const ex = await this.resolveExtras(c, dto.listingId, dto.extras, hours, dto.vehicleId);
       let price = calculatePrice({
         start, end, priceHour: Number(l.price_hour),
-        priceDay: l.price_day == null ? null : Number(l.price_day), commissionRate: rate,
+        priceDay: l.price_day == null ? null : Number(l.price_day), extrasAmount: ex.amount, commissionRate: rate,
       });
+      let lines = ex.lines;
       if (override) {
-        // Negotiated price: the commission applies to the final agreed amount.
+        // Negotiated price covers parking + extras; commission applies to the final agreed amount.
+        // Parking/extras are split in proportion to the list price so the parts still add up.
+        const ratio = override.amount / price.total;
+        const parking = r2(price.parking * ratio);
         const commission = r2(override.amount * rate);
-        price = { parking: override.amount, extras: 0, total: override.amount, commissionRate: rate, commission, hostEarnings: r2(override.amount - commission) };
+        price = { parking, extras: r2(override.amount - parking), total: override.amount, commissionRate: rate, commission, hostEarnings: r2(override.amount - commission) };
+        lines = lines.map((x: any) => ({ ...x, line_total: r2(x.line_total * ratio) }));
       }
       const blockedEnd = new Date(end.getTime() + l.buffer_minutes * 60_000);
       const reference = 'PS-' + randomBytes(3).toString('hex').toUpperCase();
@@ -70,6 +110,11 @@ export class BookingsService {
           [reference, dto.listingId, driverId, l.host_id, dto.vehicleId ?? null, start, end, blockedEnd,
            price.parking, price.extras, price.total, price.commissionRate, price.commission, price.hostEarnings, override?.offerId ?? null]);
         await this.event(c, rows[0].id, 'created', 'driver', driverId);
+        for (const x of lines) {
+          await c.query(
+            `insert into booking_extras (booking_id, extra_type_id, price, price_unit, quantity, line_total) values ($1,$2,$3,$4,$5,$6)`,
+            [rows[0].id, x.extra_type_id, x.price, x.price_unit, x.quantity, x.line_total]);
+        }
         // Someone else's open offers for an overlapping slot can no longer be honoured.
         const closed = await c.query(
           `update offers set status = 'expired', decline_reason = 'slot_taken'
@@ -348,6 +393,9 @@ export class BookingsService {
       b.overstay_fee_now = r2(hours * Number(ph) * mult);
       b.overstay_hours = hours;
     }
+    b.extras = (await q(
+      `select be.id, et.name, be.price, be.price_unit, be.quantity, be.line_total
+       from booking_extras be join extra_types et on et.id = be.extra_type_id where be.booking_id = $1 order by et.name`, [id])).rows;
     b.viewer = isDriver ? 'driver' : b.host_id === userId ? 'host' : 'admin';
     return b;
   }

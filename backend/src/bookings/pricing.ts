@@ -39,3 +39,18 @@ export function calculatePrice(i: PriceInput): PriceBreakdown {
     hostEarnings: round2(total - commission),
   };
 }
+
+export interface ExtraLineInput {
+  price: number;
+  unit: 'per_booking' | 'per_hour' | 'per_day' | 'per_kwh';
+  quantity?: number; // kWh for per_kwh
+}
+
+/** Line total for one paid extra, given the stay length in (started) hours. */
+export function extraLineTotal(e: ExtraLineInput, hours: number): { quantity: number; total: number } {
+  const quantity =
+    e.unit === 'per_hour' ? hours :
+    e.unit === 'per_day' ? Math.ceil(hours / 24) :
+    e.unit === 'per_kwh' ? Math.min(200, Math.max(1, e.quantity ?? 10)) : 1;
+  return { quantity, total: round2(e.price * quantity) };
+}

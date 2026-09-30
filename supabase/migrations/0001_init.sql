@@ -114,12 +114,14 @@ create table extra_types (
   name text not null,
   description text,
   allowed_price_units text[] not null default '{per_booking}',
+  ev_only boolean not null default false,   -- only offered to drivers whose vehicle is an EV with a matching connector
   active boolean not null default true
 );
-insert into extra_types (name, allowed_price_units) values
-  ('CCTV surveillance', '{per_booking,per_day}'),
-  ('EV charging', '{per_booking,per_hour,per_kwh}'),
-  ('Car wash / valet', '{per_booking}');
+insert into extra_types (name, description, allowed_price_units, ev_only) values
+  ('CCTV surveillance', 'Camera covers this space', '{per_booking,per_day}', false),
+  ('EV charging', 'Charge your electric vehicle while you park', '{per_booking,per_hour,per_kwh}', true),
+  ('Car wash / valet', 'Host-provided wash while you park', '{per_booking}', false),
+  ('Extra-large space', 'Room for vans and large vehicles', '{per_booking,per_hour}', false);
 
 create table listing_extras (
   id uuid primary key default gen_random_uuid(),
@@ -138,7 +140,7 @@ create table offers (
   vehicle_id uuid references vehicles(id),
   start_at timestamptz not null,
   end_at timestamptz not null,
-  extras jsonb,
+  extras jsonb,                       -- [{id: listing_extra_id, quantity?}] fixed for the whole negotiation
   amount numeric(8,2) not null,
   round int not null default 1 check (round <= 4),
   sent_by text not null check (sent_by in ('driver','host')),
