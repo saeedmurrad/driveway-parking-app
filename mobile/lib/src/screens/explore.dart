@@ -31,6 +31,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
   DateTime _start = DateTime.now();
   int _hours = 2;
   final Set<String> _filters = {};
+  bool _instantOnly = false;
+  double? _maxPrice;
   String _sort = 'distance';
   List<Json> _all = [];
   bool _loading = true;
@@ -76,7 +78,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
   }
 
   List<Json> get _results {
-    final r = _all.where((l) => _filters.every((f) => (l['features'] as List).contains(f))).toList();
+    final r = _all
+        .where((l) => _filters.every((f) => (l['features'] as List).contains(f)))
+        .where((l) => !_instantOnly || l['booking_mode'] == 'instant')
+        .where((l) => _maxPrice == null || num_(l['price_hour']) <= _maxPrice!)
+        .toList();
     r.sort((a, b) => switch (_sort) {
           'price' => num_(a['quote']['total']).compareTo(num_(b['quote']['total'])),
           'rating' => num_(b['rating']).compareTo(num_(a['rating'])),
@@ -184,6 +190,23 @@ class _ExploreScreenState extends State<ExploreScreen> {
               const SizedBox(width: 6),
               const SizedBox(height: 24, child: VerticalDivider()),
               const SizedBox(width: 6),
+              Padding(padding: const EdgeInsets.only(right: 6), child: FilterChip(
+                avatar: const Icon(Icons.bolt, size: 16), label: const Text('Instant book'), selected: _instantOnly,
+                onSelected: (v) => setState(() => _instantOnly = v))),
+              Padding(padding: const EdgeInsets.only(right: 6), child: PopupMenuButton<double?>(
+                onSelected: (v) => setState(() => _maxPrice = v),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: null, child: Text('Any price')),
+                  PopupMenuItem(value: 2.5, child: Text('Up to £2.50/h')),
+                  PopupMenuItem(value: 3.0, child: Text('Up to £3.00/h')),
+                  PopupMenuItem(value: 4.0, child: Text('Up to £4.00/h')),
+                ],
+                child: Chip(
+                  avatar: const Icon(Icons.sell_outlined, size: 16),
+                  label: Text(_maxPrice == null ? 'Price' : '≤ £${_maxPrice!.toStringAsFixed(2)}/h'),
+                  backgroundColor: _maxPrice == null ? null : const Color(0xFFDDE7FF),
+                ),
+              )),
               for (final f in const ['covered', 'cctv', 'ev_charging', 'gated'])
                 Padding(padding: const EdgeInsets.only(right: 6), child: FilterChip(
                   avatar: Icon(featureIcons[f]!.$1, size: 16), label: Text(featureIcons[f]!.$2), selected: _filters.contains(f),
@@ -328,10 +351,14 @@ class _ResultList extends StatelessWidget {
                   const SizedBox(height: 2),
                   Row(children: [
                     Stars(l['rating']),
-                    Text('  ·  ${(num_(l['distance_m']) / 1000).toStringAsFixed(1)} km  ·  ${l['host_name']}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                    Text('  ·  ${(num_(l['distance_m']) / 1000).toStringAsFixed(1)} km  ·  ${(num_(l['distance_m']) / 80).ceil()} min walk  ·  ${l['host_name']}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
                   ]),
                   const SizedBox(height: 6),
-                  Wrap(spacing: 8, children: [for (final f in feats.take(4)) Icon(featureIcons[f]?.$1 ?? Icons.check, size: 16, color: Colors.black45)]),
+                  Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                    for (final f in feats.take(4)) Icon(featureIcons[f]?.$1 ?? Icons.check, size: 16, color: Colors.black45),
+                    if (l['booking_mode'] == 'request') const Icon(Icons.how_to_reg_outlined, size: 16, color: Colors.orange),
+                    if (l['allow_offers'] == true) const Icon(Icons.handshake_outlined, size: 16, color: Colors.teal),
+                  ]),
                 ])),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   Text(money(l['quote']['total']), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),

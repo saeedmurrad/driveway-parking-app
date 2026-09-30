@@ -75,6 +75,21 @@ def ledger(bid):
     return out
 
 
+def reset():
+    """Make the run repeatable: remove rows created by earlier runs, keep the seed data."""
+    psql("""
+      delete from transactions where booking_id in (select id from bookings where reference not like 'PS-SEED%') or type = 'payout';
+      delete from booking_events where booking_id in (select id from bookings where reference not like 'PS-SEED%');
+      delete from reviews where booking_id in (select id from bookings where reference not like 'PS-SEED%');
+      delete from bookings where reference not like 'PS-SEED%';
+      delete from payouts; delete from availability_blocks;
+      delete from availability_rules where listing_id <> '10000000-0000-4000-8000-000000000003';
+      update listings set cancellation_policy = 'strict' where id = '10000000-0000-4000-8000-000000000005';
+      update settings set value = '0.20' where key = 'commission_rate';
+    """)
+
+
+reset()
 now = datetime.now(timezone.utc)
 D, H, A = login("driver@demo.parkspace.test"), login("host@demo.parkspace.test"), login("admin@demo.parkspace.test")
 OMAR = login("omar@demo.parkspace.test")
@@ -137,8 +152,8 @@ def cancel_case(label, listing, start_off_h, age_booking, expect_pct, who=D):
 cancel_case("moderate, 40h out", ids["euston"], 40, True, 100)
 cancel_case("moderate, 10h out", ids["euston"], 10, True, 50)
 cancel_case("moderate, 0.5h out", ids["euston"], 0.5, True, 0)
-cancel_case("strict, 30h out", ids["bloom"], 30, True, 50)
-cancel_case("strict, 10h out", ids["bloom"], 10, True, 0)
+cancel_case("strict, 30h out", ids["islington"], 30, True, 50)
+cancel_case("strict, 10h out", ids["islington"], 10, True, 0)
 cancel_case("flexible, 3h out", ids["camden"], 3, True, 100)
 cancel_case("mistake protection (cancel within 5 min, strict, 2h out)", ids["islington"], 2, False, 100)
 s, b = book(D, ids["shoreditch"], now + timedelta(hours=1))
@@ -202,6 +217,54 @@ check("new booking uses 25%, old keeps 20%", float(new["commission_rate"]) == 0.
 call("PUT", "/admin/settings", {"key": "commission_rate", "value": "0.2"}, A)
 s, _ = call("PUT", "/admin/settings", {"key": "commission_rate", "value": "0.9"}, A)
 check("commission outside 0-50% rejected", s == 400)
+
+print("Availability, blocks, editing, stay limits")
+# Bloomsbury is open Mon-Fri 07:00-19:00 UK time only
+d = now + timedelta(days=1)
+while d.astimezone(timezone(timedelta(hours=0))).weekday() != 1:  # next Tuesday (UTC weekday; times below are well inside the window either way)
+    d += timedelta(days=1)
+tue_noon = d.replace(hour=12, minute=0, second=0, microsecond=0)
+s, r = book(D, ids["bloom"], tue_noon, hours=2, pay=False)
+check("booking inside weekly hours allowed", s == 201, r)
+s, r = book(D, ids["bloom"], tue_noon.replace(hour=22), hours=2, pay=False)
+check("booking outside weekly hours rejected", s == 400, (s, r))
+sat = tue_noon + timedelta(days=4)
+s, r = book(D, ids["bloom"], sat, hours=2, pay=False)
+check("booking on a closed day rejected", s == 400, (s, r))
+s, res = call("GET", f"/listings/search?lat=51.5246&lng=-0.1256&vehicleSize=small&start={iso(tue_noon + timedelta(days=7))}&end={iso(tue_noon + timedelta(days=7, hours=2))}", token=D)
+check("search includes it inside hours", any(x["id"] == ids["bloom"] for x in res))
+s, res = call("GET", f"/listings/search?lat=51.5246&lng=-0.1256&vehicleSize=small&start={iso(sat + timedelta(days=7))}&end={iso(sat + timedelta(days=7, hours=2))}", token=D)
+check("search excludes it on closed day", not any(x["id"] == ids["bloom"] for x in res))
+
+# host edits availability + blocks on Helen's Camden space
+s, _ = call("PUT", f"/listings/{ids['camden']}/availability", {"always": False, "rules": [{"dayOfWeek": i, "start": "08:00", "end": "20:00"} for i in range(7)]}, H)
+check("host sets weekly availability", s == 200)
+s, av = call("GET", f"/listings/{ids['camden']}/availability", token=H)
+check("availability readable", av["always"] is False and len(av["rules"]) == 7)
+s, _ = call("PUT", f"/listings/{ids['camden']}/availability", {"always": False, "rules": [{"dayOfWeek": 1, "start": "10:00", "end": "09:00"}]}, H)
+check("inverted window rejected", s == 400)
+s, _ = call("PUT", f"/listings/{ids['camden']}/availability", {"always": True}, OMAR)
+check("another host cannot edit availability", s == 404)
+call("PUT", f"/listings/{ids['camden']}/availability", {"always": True}, H)
+blk_start = now + timedelta(days=20)
+s, blk = call("POST", f"/listings/{ids['camden']}/blocks", {"start": iso(blk_start), "end": iso(blk_start + timedelta(hours=6)), "reason": "Family visit"}, H)
+check("host blocks a date range", s == 201)
+s, r = book(D, ids["camden"], blk_start + timedelta(hours=1), hours=1, pay=False)
+check("blocked time cannot be booked", s == 400, (s, r))
+call("DELETE", f"/listings/{ids['camden']}/blocks/{blk['id']}", None, H)
+s, r = book(D, ids["camden"], blk_start + timedelta(hours=1), hours=1, pay=False)
+check("unblocked time can be booked", s == 201, (s, r))
+s, bk = book(D, ids["camden"], now + timedelta(days=22), pay=True)
+s, r = call("POST", f"/listings/{ids['camden']}/blocks", {"start": iso(now + timedelta(days=22)), "end": iso(now + timedelta(days=22, hours=4))}, H)
+check("cannot block over an existing booking", s == 409, (s, r))
+
+s, r = call("PATCH", f"/listings/{ids['kx']}", {"priceHour": 2.75, "title": "Driveway near King's Cross"}, H)
+check("host edits listing price", s == 200 and float(r["price_hour"]) == 2.75)
+s, _ = call("PATCH", f"/listings/{ids['kx']}", {"priceHour": 2.5}, OMAR)
+check("other host cannot edit my listing", s == 404)
+call("PATCH", f"/listings/{ids['kx']}", {"priceHour": 2.5}, H)
+s, r = book(D, ids["kx"], now + timedelta(days=25), hours=1000, pay=False)
+check("stay over the max is rejected", s == 400, (s, r))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

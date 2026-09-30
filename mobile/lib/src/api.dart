@@ -30,6 +30,7 @@ class Api {
         'POST' => await http.post(uri, headers: headers, body: jsonEncode(body ?? {})),
         'PUT' => await http.put(uri, headers: headers, body: jsonEncode(body ?? {})),
         'PATCH' => await http.patch(uri, headers: headers, body: jsonEncode(body ?? {})),
+        'DELETE' => await http.delete(uri, headers: headers),
         _ => await http.get(uri, headers: headers),
       };
     } catch (_) {
@@ -47,4 +48,5 @@ class Api {
   Future<dynamic> post(String path, [Object? body]) => _send('POST', path, body: body);
   Future<dynamic> put(String path, Object body) => _send('PUT', path, body: body);
   Future<dynamic> patch(String path, Object body) => _send('PATCH', path, body: body);
+  Future<dynamic> delete(String path) => _send('DELETE', path);
 }

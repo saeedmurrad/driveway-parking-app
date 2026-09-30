@@ -19,6 +19,15 @@ insert into listings (id, host_id, title, address, postcode, latitude, longitude
  ('10000000-0000-4000-8000-000000000007','00000000-0000-4000-8000-000000000004','Waterloo covered parking bay','14 The Cut, London','SE1 8LN',51.5031,-0.1132,'bay','medium','{covered,cctv,gated}','Fob at the gate is on the key hook by the door.',4.00,26.00,'moderate',4.9,'live'),
  ('10000000-0000-4000-8000-000000000008','00000000-0000-4000-8000-000000000004','Canary Wharf forecourt','3 Marsh Wall, London','E14 9SH',51.5054,-0.0235,'forecourt','large','{gated,lit,level_access}','Ring bell 6.',3.80,24.00,'flexible',null,'pending_approval');
 
+-- Feature flags for demos: price negotiation, request-to-book, and office-hours availability.
+update listings set allow_offers = true, min_offer_price = 1.75 where id = '10000000-0000-4000-8000-000000000001';
+update listings set allow_offers = true, min_offer_price = 2.20 where id = '10000000-0000-4000-8000-000000000002';
+update listings set allow_offers = true, min_offer_price = 1.50 where id = '10000000-0000-4000-8000-000000000006';
+update listings set booking_mode = 'request' where id = '10000000-0000-4000-8000-000000000007';
+-- Bloomsbury bay is only available Mon-Fri 07:00-19:00 (UK time).
+insert into availability_rules (listing_id, day_of_week, start_time, end_time)
+  select '10000000-0000-4000-8000-000000000003', d, '07:00', '19:00' from generate_series(1, 5) d;
+
 -- Booking history so dashboards look alive: completed past bookings (driver Dan).
 do $$
 declare

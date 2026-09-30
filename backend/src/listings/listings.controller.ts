@@ -1,5 +1,5 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { ArrayMaxSize, IsArray, IsIn, IsNumber, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength } from 'class-validator';
 import { DbService } from '../db/db.service';
 import { AuthUser } from '../auth/auth.service';
 import { AuthGuard, CurrentUser } from '../auth/auth.guard';
@@ -7,20 +7,58 @@ import { BookingsService } from '../bookings/bookings.service';
 import { calculatePrice } from '../bookings/pricing';
 import { SettingsService } from '../settings/settings.service';
 
-class CreateListingDto {
-  @IsString() @MinLength(3) title: string;
-  @IsString() @MinLength(3) address: string;
+class ListingBase {
   @IsOptional() @IsString() postcode?: string;
-  @IsNumber() @Min(-90) @Max(90) latitude: number;
-  @IsNumber() @Min(-180) @Max(180) longitude: number;
-  @IsIn(['driveway', 'garage', 'bay', 'forecourt']) spaceType: string;
-  @IsIn(['small', 'medium', 'large', 'van']) maxVehicleSize: string;
-  @IsNumber() @Min(0.5) @Max(100) priceHour: number;
-  @IsOptional() @IsNumber() @Min(1) priceDay?: number;
+  @IsOptional() @IsIn(['driveway', 'garage', 'bay', 'forecourt']) spaceType?: string;
+  @IsOptional() @IsIn(['small', 'medium', 'large', 'van']) maxVehicleSize?: string;
+  @IsOptional() @IsNumber() @Min(1) priceDay?: number | null;
   @IsOptional() @IsArray() @ArrayMaxSize(10) features?: string[];
   @IsOptional() @IsString() accessInstructions?: string;
-  @IsIn(['flexible', 'moderate', 'strict']) cancellationPolicy: string;
+  @IsOptional() @IsIn(['flexible', 'moderate', 'strict']) cancellationPolicy?: string;
+  @IsOptional() @IsInt() @Min(15) minStayMinutes?: number;
+  @IsOptional() @IsInt() @Min(30) maxStayMinutes?: number;
+  @IsOptional() @IsBoolean() allowOffers?: boolean;
+  @IsOptional() @IsNumber() @Min(0) minOfferPrice?: number | null;
+  @IsOptional() @IsIn(['instant', 'request']) bookingMode?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(120) bufferMinutes?: number;
 }
+class CreateListingDto extends ListingBase {
+  @IsString() @MinLength(3) title: string;
+  @IsString() @MinLength(3) address: string;
+  @IsNumber() @Min(-90) @Max(90) latitude: number;
+  @IsNumber() @Min(-180) @Max(180) longitude: number;
+  @IsNumber() @Min(0.5) @Max(100) priceHour: number;
+}
+class ListingFields extends ListingBase {
+  @IsOptional() @IsString() @MinLength(3) title?: string;
+  @IsOptional() @IsString() @MinLength(3) address?: string;
+  @IsOptional() @IsNumber() @Min(-90) @Max(90) latitude?: number;
+  @IsOptional() @IsNumber() @Min(-180) @Max(180) longitude?: number;
+  @IsOptional() @IsNumber() @Min(0.5) @Max(100) priceHour?: number;
+}
+class RuleDto {
+  @IsInt() @Min(0) @Max(6) dayOfWeek: number;
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) start: string;
+  @Matches(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/) end: string;
+}
+class AvailabilityDto {
+  @IsBoolean() always: boolean;
+  @IsOptional() @IsArray() rules?: RuleDto[];
+}
+class BlockDto {
+  @IsString() start: string;
+  @IsString() end: string;
+  @IsOptional() @IsString() reason?: string;
+}
+
+// camelCase DTO key -> column
+const COLS: Record<string, string> = {
+  title: 'title', address: 'address', postcode: 'postcode', latitude: 'latitude', longitude: 'longitude',
+  spaceType: 'space_type', maxVehicleSize: 'max_vehicle_size', priceHour: 'price_hour', priceDay: 'price_day',
+  features: 'features', accessInstructions: 'access_instructions', cancellationPolicy: 'cancellation_policy',
+  minStayMinutes: 'min_stay_minutes', maxStayMinutes: 'max_stay_minutes', allowOffers: 'allow_offers',
+  minOfferPrice: 'min_offer_price', bookingMode: 'booking_mode', bufferMinutes: 'buffer_minutes',
+};
 
 @Controller('listings')
 export class ListingsController {
@@ -56,7 +94,8 @@ export class ListingsController {
   async one(@Param('id') id: string, @Query('start') start?: string, @Query('end') end?: string) {
     const { rows } = await this.db.query(
       `select l.id, l.title, l.latitude, l.longitude, l.postcode, l.space_type, l.max_vehicle_size, l.features,
-              l.price_hour, l.price_day, l.cancellation_policy, l.booking_mode, l.rating, l.status,
+              l.price_hour, l.price_day, l.cancellation_policy, l.booking_mode, l.allow_offers, l.rating, l.status,
+              l.min_stay_minutes, l.max_stay_minutes,
               split_part(u.name,' ',1) as host_name,
               (select count(*) from reviews r where r.listing_id = l.id)::int as review_count
        from listings l join users u on u.id = l.host_id where l.id = $1 and l.status in ('live','paused')`, [id]);
@@ -72,12 +111,27 @@ export class ListingsController {
   @Post() @UseGuards(AuthGuard)
   async create(@CurrentUser() u: AuthUser, @Body() d: CreateListingDto) {
     if (!u.isHost) throw new ForbiddenException('Switch to a host account first');
+    const cols = ['host_id', 'status'];
+    const vals: unknown[] = [u.id, 'pending_approval'];
+    for (const [k, col] of Object.entries(COLS)) {
+      if ((d as any)[k] !== undefined) { cols.push(col); vals.push((d as any)[k]); }
+    }
+    const ph = vals.map((_, i) => `$${i + 1}`).join(',');
+    const { rows } = await this.db.query(`insert into listings (${cols.join(',')}) values (${ph}) returning *`, vals);
+    return rows[0];
+  }
+
+  @Patch(':id') @UseGuards(AuthGuard)
+  async update(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: ListingFields) {
+    const sets: string[] = [];
+    const vals: unknown[] = [id, u.id];
+    for (const [k, col] of Object.entries(COLS)) {
+      if ((d as any)[k] !== undefined) { vals.push((d as any)[k]); sets.push(`${col} = $${vals.length}`); }
+    }
+    if (!sets.length) throw new BadRequestException('Nothing to update');
     const { rows } = await this.db.query(
-      `insert into listings (host_id, title, address, postcode, latitude, longitude, space_type, max_vehicle_size,
-         features, access_instructions, price_hour, price_day, cancellation_policy, status)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending_approval') returning *`,
-      [u.id, d.title, d.address, d.postcode ?? null, d.latitude, d.longitude, d.spaceType, d.maxVehicleSize,
-       d.features ?? [], d.accessInstructions ?? null, d.priceHour, d.priceDay ?? null, d.cancellationPolicy]);
+      `update listings set ${sets.join(', ')} where id = $1 and host_id = $2 and status <> 'removed' returning *`, vals);
+    if (!rows[0]) throw new NotFoundException();
     return rows[0];
   }
 
@@ -89,5 +143,59 @@ export class ListingsController {
       [id, u.id, status]);
     if (!rows[0]) throw new NotFoundException('Only your approved listings can be paused or resumed');
     return rows[0];
+  }
+
+  private async owned(u: AuthUser, id: string) {
+    const r = await this.db.query('select 1 from listings where id = $1 and host_id = $2', [id, u.id]);
+    if (!r.rowCount) throw new NotFoundException();
+  }
+
+  @Get(':id/availability') @UseGuards(AuthGuard)
+  async availability(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    await this.owned(u, id);
+    const rules = (await this.db.query(
+      `select day_of_week, to_char(start_time,'HH24:MI') as start, to_char(end_time,'HH24:MI') as "end"
+       from availability_rules where listing_id = $1 order by day_of_week, start_time`, [id])).rows;
+    const blocks = (await this.db.query(
+      `select id, start_datetime, end_datetime, reason from availability_blocks
+       where listing_id = $1 and end_datetime > now() order by start_datetime`, [id])).rows;
+    return { always: rules.length === 0, rules, blocks };
+  }
+
+  @Put(':id/availability') @UseGuards(AuthGuard)
+  async setAvailability(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: AvailabilityDto) {
+    await this.owned(u, id);
+    const rules = d.always ? [] : d.rules ?? [];
+    if (!d.always && rules.length === 0) throw new BadRequestException('Add at least one opening window, or choose always available');
+    for (const r of rules) if (r.end !== '24:00' && r.end <= r.start) throw new BadRequestException('Each window must end after it starts');
+    await this.db.tx(async (c) => {
+      await c.query('delete from availability_rules where listing_id = $1', [id]);
+      for (const r of rules) {
+        await c.query('insert into availability_rules (listing_id, day_of_week, start_time, end_time) values ($1,$2,$3,$4)',
+          [id, r.dayOfWeek, r.start, r.end]);
+      }
+    });
+    return { ok: true };
+  }
+
+  @Post(':id/blocks') @UseGuards(AuthGuard)
+  async addBlock(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: BlockDto) {
+    await this.owned(u, id);
+    const s = new Date(d.start), e = new Date(d.end);
+    if (isNaN(+s) || isNaN(+e) || !(e > s)) throw new BadRequestException('Invalid block times');
+    const clash = await this.db.query(
+      `select 1 from bookings where listing_id = $1 and status in ('confirmed','parked','overstay','requested')
+       and tstzrange(booked_start, blocked_end) && tstzrange($2, $3)`, [id, s, e]);
+    if (clash.rowCount) throw new ConflictException('That time already has a booking. Cancel it first if you need the space.');
+    return (await this.db.query(
+      `insert into availability_blocks (listing_id, start_datetime, end_datetime, reason) values ($1,$2,$3,$4) returning *`,
+      [id, s, e, d.reason ?? null])).rows[0];
+  }
+
+  @Delete(':id/blocks/:blockId') @UseGuards(AuthGuard)
+  async removeBlock(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('blockId') blockId: string) {
+    await this.owned(u, id);
+    await this.db.query('delete from availability_blocks where id = $1 and listing_id = $2', [blockId, id]);
+    return { ok: true };
   }
 }

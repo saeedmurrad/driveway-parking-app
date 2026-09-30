@@ -26,16 +26,22 @@ export class BookingsService {
   async create(driverId: string, dto: { listingId: string; vehicleId?: string; start: string; end: string }) {
     const start = new Date(dto.start);
     const end = new Date(dto.end);
-    if (!(end.getTime() - start.getTime() >= 30 * 60_000)) throw new BadRequestException('Minimum booking is 30 minutes');
+    if (!(end > start)) throw new BadRequestException('End must be after start');
     if (start.getTime() < Date.now() - 10 * 60_000) throw new BadRequestException('Start time is in the past');
     const rate = await this.settings.getNumber('commission_rate');
 
     return this.db.tx(async (c) => {
       const l = (await c.query(
-        `select host_id, price_hour, price_day, buffer_minutes from listings where id = $1 and status = 'live'`,
-        [dto.listingId])).rows[0];
+        `select host_id, price_hour, price_day, buffer_minutes, min_stay_minutes, max_stay_minutes,
+                listing_available(id, $2, $3) as open
+         from listings where id = $1 and status = 'live'`,
+        [dto.listingId, start, end])).rows[0];
       if (!l) throw new NotFoundException('Listing not available');
       if (l.host_id === driverId) throw new BadRequestException('You cannot book your own space');
+      if (!l.open) throw new BadRequestException('The host is not offering this space at those times');
+      const mins = (end.getTime() - start.getTime()) / 60_000;
+      if (mins < l.min_stay_minutes) throw new BadRequestException(`Minimum stay is ${l.min_stay_minutes} minutes`);
+      if (mins > l.max_stay_minutes) throw new BadRequestException(`Maximum stay is ${Math.round(l.max_stay_minutes / 60)} hours`);
 
       const price = calculatePrice({
         start, end, priceHour: Number(l.price_hour),

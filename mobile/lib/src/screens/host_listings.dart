@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../api.dart';
 import '../state.dart';
 import '../ui.dart';
+import 'availability.dart';
 
 class HostListings extends StatelessWidget {
   const HostListings({super.key});
@@ -71,6 +72,26 @@ class _ListingCard extends StatelessWidget {
       ]),
       if (status == 'pending_approval')
         const Padding(padding: EdgeInsets.only(top: 12), child: Text('Waiting for admin approval before it appears in search.', style: TextStyle(fontSize: 12, color: Color(0xFF8A5B00)))),
+      const SizedBox(height: 8),
+      Row(children: [
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 38)),
+          icon: const Icon(Icons.edit_outlined, size: 18), label: const Text('Edit'),
+          onPressed: () async {
+            final ok = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => AddListing(initial: l)));
+            if (ok == true) onChanged();
+          },
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 38)),
+          icon: const Icon(Icons.calendar_month_outlined, size: 18), label: const Text('Availability'),
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AvailabilityScreen(listingId: l['id'], title: l['title']))),
+        ),
+        const SizedBox(width: 8),
+        if (l['allow_offers'] == true) const Chip(avatar: Icon(Icons.handshake_outlined, size: 16), label: Text('Offers on'), visualDensity: VisualDensity.compact),
+        if (l['booking_mode'] == 'request') const Chip(avatar: Icon(Icons.how_to_reg_outlined, size: 16), label: Text('Request to book'), visualDensity: VisualDensity.compact),
+      ]),
       if (toggleable)
         SwitchListTile(
           contentPadding: EdgeInsets.zero, dense: true,
@@ -96,19 +117,34 @@ class _ListingCard extends StatelessWidget {
 }
 
 class AddListing extends StatefulWidget {
-  const AddListing({super.key});
+  const AddListing({super.key, this.initial});
+  final Json? initial;
 
   @override
   State<AddListing> createState() => _AddListingState();
 }
 
 class _AddListingState extends State<AddListing> {
-  final _title = TextEditingController(), _address = TextEditingController(), _postcode = TextEditingController();
-  final _hour = TextEditingController(text: '2.50'), _day = TextEditingController(), _access = TextEditingController();
-  String _type = 'driveway', _size = 'medium', _policy = 'flexible';
-  final Set<String> _features = {};
-  LatLng _pin = const LatLng(51.5308, -0.1238);
+  late final Json _i = widget.initial ?? {};
+  late final _title = TextEditingController(text: _i['title']);
+  late final _address = TextEditingController(text: _i['address']);
+  late final _postcode = TextEditingController(text: _i['postcode']);
+  late final _hour = TextEditingController(text: _i['price_hour'] == null ? '2.50' : '${num_(_i['price_hour'])}');
+  late final _day = TextEditingController(text: _i['price_day'] == null ? '' : '${num_(_i['price_day'])}');
+  late final _access = TextEditingController(text: _i['access_instructions']);
+  late final _minOffer = TextEditingController(text: _i['min_offer_price'] == null ? '' : '${num_(_i['min_offer_price'])}');
+  late String _type = _i['space_type'] ?? 'driveway';
+  late String _size = _i['max_vehicle_size'] ?? 'medium';
+  late String _policy = _i['cancellation_policy'] ?? 'flexible';
+  late String _mode = _i['booking_mode'] ?? 'instant';
+  late bool _offers = _i['allow_offers'] == true;
+  late int _minStay = _i['min_stay_minutes'] ?? 30;
+  late int _maxStayH = ((_i['max_stay_minutes'] ?? 43200) / 60).round();
+  late int _buffer = _i['buffer_minutes'] ?? 15;
+  late final Set<String> _features = {...((_i['features'] as List?)?.cast<String>() ?? const <String>[])};
+  late LatLng _pin = LatLng(num_(_i['latitude'] ?? 51.5308), num_(_i['longitude'] ?? -0.1238));
   bool _busy = false;
+  bool get _editing => widget.initial != null;
 
   Future<void> _submit() async {
     final hour = double.tryParse(_hour.text);
@@ -118,22 +154,35 @@ class _AddListingState extends State<AddListing> {
     }
     setState(() => _busy = true);
     try {
-      await context.read<AppState>().api.post('/listings', {
+      final body = {
         'title': _title.text.trim(), 'address': _address.text.trim(),
         if (_postcode.text.trim().isNotEmpty) 'postcode': _postcode.text.trim(),
         'latitude': _pin.latitude, 'longitude': _pin.longitude,
         'spaceType': _type, 'maxVehicleSize': _size, 'priceHour': hour,
-        if (double.tryParse(_day.text) != null) 'priceDay': double.parse(_day.text),
+        'priceDay': double.tryParse(_day.text),
         'features': _features.toList(), 'cancellationPolicy': _policy,
-        if (_access.text.trim().isNotEmpty) 'accessInstructions': _access.text.trim(),
-      });
+        'accessInstructions': _access.text.trim(),
+        'bookingMode': _mode, 'allowOffers': _offers,
+        'minOfferPrice': _offers ? double.tryParse(_minOffer.text) : null,
+        'minStayMinutes': _minStay, 'maxStayMinutes': _maxStayH * 60, 'bufferMinutes': _buffer,
+      };
+      final api = context.read<AppState>().api;
+      if (_editing) {
+        await api.patch('/listings/${_i['id']}', body);
+      } else {
+        await api.post('/listings', body..removeWhere((k, v) => v == null));
+      }
       if (!mounted) return;
-      await showDialog(context: context, builder: (c) => AlertDialog(
-        icon: const Icon(Icons.check_circle, color: Colors.green, size: 40),
-        title: const Text('Submitted for review'),
-        content: const Text("Thanks! Once our team approves your space it will appear in search. You'll see its status under My spaces."),
-        actions: [FilledButton(onPressed: () => Navigator.pop(c), child: const Text('Done'))],
-      ));
+      if (!_editing) {
+        await showDialog(context: context, builder: (c) => AlertDialog(
+          icon: const Icon(Icons.check_circle, color: Colors.green, size: 40),
+          title: const Text('Submitted for review'),
+          content: const Text("Thanks! Once our team approves your space it will appear in search. You'll see its status under My spaces. Next, set when it's available."),
+          actions: [FilledButton(onPressed: () => Navigator.pop(c), child: const Text('Done'))],
+        ));
+      } else {
+        toast(context, 'Space updated');
+      }
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       if (mounted) toast(context, e.message, error: true);
@@ -144,7 +193,7 @@ class _AddListingState extends State<AddListing> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Add a space')),
+        appBar: AppBar(title: Text(_editing ? 'Edit space' : 'Add a space')),
         body: ListView(children: [
           Centered(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             _section('The basics'),
@@ -186,7 +235,7 @@ class _AddListingState extends State<AddListing> {
                 ],
               )),
             ),
-            _section('Pricing'),
+            _section('Pricing & stay'),
             Row(children: [
               Expanded(child: TextField(controller: _hour, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Price per hour', prefixText: '£ '))),
               const SizedBox(width: 12),
@@ -194,6 +243,53 @@ class _AddListingState extends State<AddListing> {
             ]),
             const SizedBox(height: 6),
             const Text('If a stay is long enough, the cheaper day rate is applied automatically. You receive 80% of each booking.', style: TextStyle(fontSize: 12, color: Colors.black45)),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: DropdownButtonFormField<int>(
+                initialValue: _minStay, decoration: const InputDecoration(labelText: 'Minimum stay'),
+                items: const [
+                  DropdownMenuItem(value: 30, child: Text('30 min')), DropdownMenuItem(value: 60, child: Text('1 hour')),
+                  DropdownMenuItem(value: 120, child: Text('2 hours')), DropdownMenuItem(value: 240, child: Text('4 hours')),
+                ],
+                onChanged: (v) => setState(() => _minStay = v!),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: DropdownButtonFormField<int>(
+                initialValue: [12, 24, 72, 168, 720].contains(_maxStayH) ? _maxStayH : 720, decoration: const InputDecoration(labelText: 'Maximum stay'),
+                items: const [
+                  DropdownMenuItem(value: 12, child: Text('12 hours')), DropdownMenuItem(value: 24, child: Text('1 day')),
+                  DropdownMenuItem(value: 72, child: Text('3 days')), DropdownMenuItem(value: 168, child: Text('1 week')), DropdownMenuItem(value: 720, child: Text('30 days')),
+                ],
+                onChanged: (v) => setState(() => _maxStayH = v!),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: DropdownButtonFormField<int>(
+                initialValue: [0, 15, 30, 60].contains(_buffer) ? _buffer : 15, decoration: const InputDecoration(labelText: 'Buffer between'),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('None')), DropdownMenuItem(value: 15, child: Text('15 min')),
+                  DropdownMenuItem(value: 30, child: Text('30 min')), DropdownMenuItem(value: 60, child: Text('1 hour')),
+                ],
+                onChanged: (v) => setState(() => _buffer = v!),
+              )),
+            ]),
+            _section('How people book'),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'instant', icon: Icon(Icons.bolt), label: Text('Instant book')),
+                ButtonSegment(value: 'request', icon: Icon(Icons.how_to_reg_outlined), label: Text('Request to book')),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (v) => setState(() => _mode = v.first),
+            ),
+            const SizedBox(height: 6),
+            Text(_mode == 'instant' ? 'Bookings are confirmed immediately.' : 'Drivers\' cards are held, and you have 30 minutes to accept or decline.', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero, value: _offers, onChanged: (v) => setState(() => _offers = v),
+              title: const Text('Allow price offers'), subtitle: const Text('Drivers can negotiate; you can accept, decline or counter.'),
+            ),
+            if (_offers)
+              TextField(controller: _minOffer, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Lowest price per hour you would accept', prefixText: '£ ', helperText: 'Offers below this are declined automatically.')),
             _section('Features'),
             Wrap(spacing: 8, runSpacing: 8, children: [
               for (final e in featureIcons.entries)
@@ -215,7 +311,7 @@ class _AddListingState extends State<AddListing> {
             const SizedBox(height: 12),
             TextField(controller: _access, maxLines: 2, decoration: const InputDecoration(labelText: 'Access instructions (shown only after payment)')),
             const SizedBox(height: 20),
-            FilledButton(onPressed: _busy ? null : _submit, child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Submit for approval')),
+            FilledButton(onPressed: _busy ? null : _submit, child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Text(_editing ? 'Save changes' : 'Submit for approval')),
             const SizedBox(height: 30),
           ])),
         ]),

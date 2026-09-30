@@ -70,7 +70,7 @@ create table listings (
   price_day numeric(8,2),
   price_week numeric(8,2),
   price_month numeric(8,2),
-  min_stay_minutes int not null default 60,
+  min_stay_minutes int not null default 30,
   max_stay_minutes int not null default 43200,
   booking_mode text not null default 'instant' check (booking_mode in ('instant','request')),
   allow_offers boolean not null default false,
@@ -278,8 +278,28 @@ create table admin_audit_log (
   created_at timestamptz not null default now()
 );
 
+-- Is a listing open for the whole window? Weekly rules are evaluated in UK local time
+-- (samples every 30 minutes); one-off host blocks always win. No rules = open 24/7.
+create or replace function listing_available(p_listing uuid, p_start timestamptz, p_end timestamptz)
+returns boolean language sql stable as $$
+  select
+    not exists (
+      select 1 from availability_blocks ab
+      where ab.listing_id = p_listing and tstzrange(ab.start_datetime, ab.end_datetime) && tstzrange(p_start, p_end))
+    and (
+      not exists (select 1 from availability_rules r where r.listing_id = p_listing)
+      or not exists (
+        select 1 from generate_series(p_start, p_end - interval '1 minute', interval '30 minutes') g(t)
+        where not exists (
+          select 1 from availability_rules r
+          where r.listing_id = p_listing
+            and r.day_of_week = extract(dow from (g.t at time zone 'Europe/London'))::int
+            and r.start_time <= (g.t at time zone 'Europe/London')::time
+            and r.end_time > (g.t at time zone 'Europe/London')::time)));
+$$;
+
 -- Nearby search: live listings within radius that are free for the whole window
--- (incl. buffer) and fit the vehicle size. Weekly availability rules are checked too.
+-- (incl. buffer), fit the vehicle, respect min/max stay and availability.
 create or replace function search_listings(
   p_lat double precision, p_lng double precision, p_radius_m int,
   p_start timestamptz, p_end timestamptz, p_vehicle_size text default 'medium'
@@ -287,36 +307,25 @@ create or replace function search_listings(
   id uuid, title text, latitude double precision, longitude double precision,
   price_hour numeric, price_day numeric, distance_m double precision, rating numeric,
   features text[], space_type text, max_vehicle_size text, booking_mode text,
-  cancellation_policy text, host_name text
+  cancellation_policy text, host_name text, allow_offers boolean
 ) language sql stable as $$
   select l.id, l.title, l.latitude, l.longitude, l.price_hour, l.price_day,
          st_distance(l.location, st_setsrid(st_makepoint(p_lng, p_lat), 4326)::geography) as distance_m,
          l.rating, l.features, l.space_type, l.max_vehicle_size, l.booking_mode,
-         l.cancellation_policy, split_part(u.name, ' ', 1) as host_name
+         l.cancellation_policy, split_part(u.name, ' ', 1) as host_name, l.allow_offers
   from listings l
   join users u on u.id = l.host_id
   where l.status = 'live'
     and st_dwithin(l.location, st_setsrid(st_makepoint(p_lng, p_lat), 4326)::geography, p_radius_m)
     and array_position(array['small','medium','large','van'], p_vehicle_size)
         <= array_position(array['small','medium','large','van'], l.max_vehicle_size)
+    and extract(epoch from (p_end - p_start)) / 60 between l.min_stay_minutes and l.max_stay_minutes
     and not exists (
       select 1 from bookings b
       where b.listing_id = l.id
         and b.status in ('pending_payment','requested','confirmed','parked','overstay')
         and tstzrange(b.booked_start, b.blocked_end) && tstzrange(p_start, p_end + make_interval(mins => l.buffer_minutes))
     )
-    and not exists (
-      select 1 from availability_blocks ab
-      where ab.listing_id = l.id and tstzrange(ab.start_datetime, ab.end_datetime) && tstzrange(p_start, p_end)
-    )
-    and (
-      not exists (select 1 from availability_rules r where r.listing_id = l.id)  -- no rules = 24/7
-      or exists (
-        select 1 from availability_rules r
-        where r.listing_id = l.id
-          and r.day_of_week = extract(dow from p_start)::int
-          and r.start_time <= p_start::time and r.end_time >= p_end::time
-      )
-    )
+    and listing_available(l.id, p_start, p_end)
   order by distance_m;
 $$;
