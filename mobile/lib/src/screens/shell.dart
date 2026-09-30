@@ -8,6 +8,7 @@ import 'explore.dart';
 import 'host_dashboard.dart';
 import 'host_earnings.dart';
 import 'host_listings.dart';
+import 'notifications.dart';
 import 'profile.dart';
 import 'spending.dart';
 
@@ -69,6 +70,7 @@ class _ShellState extends State<Shell> {
           const Text('ParkSpace', style: TextStyle(fontWeight: FontWeight.w800)),
         ]),
         actions: [
+          const NotificationBell(),
           _ModeSwitcher(state: s),
           const SizedBox(width: 12),
         ],

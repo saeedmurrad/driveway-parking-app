@@ -166,7 +166,7 @@ check("unrelated user cannot cancel someone else's booking", s == 404)
 print("Acceptance: auto-end after grace")
 s, b = book(D, ids["kx"], now + timedelta(days=9))
 call("POST", f"/bookings/{b['id']}/parked", {}, D)  # not allowed yet (too early) -> expected 400
-psql(f"update bookings set booked_start = now() - interval '3 hours', booked_end = now() - interval '30 minutes', blocked_end = now() - interval '15 minutes', status='parked', actual_parked_at = now() - interval '3 hours' where id='{b['id']}'")
+psql(f"update bookings set booked_start = now() - interval '3 hours', booked_end = now() - interval '30 minutes', blocked_end = now() - interval '15 minutes' where id='{b['id']}'")  # never parked -> no-show
 psql("update settings set value='15' where key='grace_minutes'")
 print("  ...waiting for scheduler (up to 40s)")
 for _ in range(20):
@@ -175,7 +175,7 @@ for _ in range(20):
         break
 st = psql(f"select status from bookings where id='{b['id']}'")
 evs = psql(f"select string_agg(event, ',' order by created_at) from booking_events where booking_id='{b['id']}'")
-check("parked booking past end+grace auto-ends", st == "completed" and "auto_ended" in evs, (st, evs))
+check("never-parked booking past end+grace closes as a no-show (no refund)", st == "completed" and "auto_ended" in evs, (st, evs))
 check("auto-end posts commission + host earning", set(ledger(b["id"])) >= {"commission", "host_earning"})
 
 print("Acceptance: expired unpaid booking frees the slot")
@@ -265,6 +265,100 @@ check("other host cannot edit my listing", s == 404)
 call("PATCH", f"/listings/{ids['kx']}", {"priceHour": 2.5}, H)
 s, r = book(D, ids["kx"], now + timedelta(days=25), hours=1000, pay=False)
 check("stay over the max is rejected", s == 400, (s, r))
+
+def wait_for(cond, secs=50):
+    for _ in range(secs // 2):
+        if cond():
+            return True
+        time.sleep(2)
+    return cond()
+
+
+def status_of(bid):
+    return psql(f"select status from bookings where id='{bid}'")
+
+
+def shift_to_past(bid, status="parked"):
+    psql(f"update bookings set booked_start = now() - interval '3 hours', booked_end = now() - interval '30 minutes', "
+         f"blocked_end = now() - interval '15 minutes', status = '{status}', actual_parked_at = now() - interval '3 hours' where id = '{bid}'")
+
+
+print("Request-to-book")
+s, r = book(D, ids["waterloo"], now + timedelta(days=30))
+rb = r
+check("request-mode pay -> requested, card held", r["status"] == "requested" and r["address"] is None, r.get("status"))
+check("no charge posted while only held", ledger(rb["id"]) == {})
+s, r2 = call("POST", f"/bookings/{rb['id']}/respond", {"accept": True}, H)
+check("only the booking's host can respond", s == 400)
+s, r2 = call("POST", f"/bookings/{rb['id']}/respond", {"accept": True}, OMAR)
+check("host accepts -> confirmed, address revealed", s == 201 and r2["status"] == "confirmed")
+s, dd = call("GET", f"/bookings/{rb['id']}", token=D)
+check("acceptance captures the charge", ledger(rb["id"]).get("charge") == float(rb["total_amount"]) and dd["address"])
+s, r = book(D, ids["waterloo"], now + timedelta(days=31))
+s, r2 = call("POST", f"/bookings/{r['id']}/respond", {"accept": False}, OMAR)
+check("host declines -> cancelled, never charged", r2["status"] == "cancelled" and ledger(r["id"]) == {})
+s, r = book(D, ids["waterloo"], now + timedelta(days=32))
+s, r2 = call("POST", f"/bookings/{r['id']}/cancel", None, D)
+check("driver withdraws a pending request with no charge", r2["status"] == "cancelled" and ledger(r["id"]) == {})
+s, exp = book(D, ids["waterloo"], now + timedelta(days=33))
+psql(f"update bookings set respond_by = now() - interval '1 minute' where id = '{exp['id']}'")
+
+print("Extending a booking")
+s, r = book(D, ids["kx"], now + timedelta(minutes=2), hours=2)
+ex = r
+call("POST", f"/bookings/{ex['id']}/parked", {}, D)
+s, r = call("POST", f"/bookings/{ex['id']}/extend", {"hours": 2}, D)
+check("extend +2h adds 5.00 and moves the end", s == 201 and float(r["total_amount"]) == 10.0 and float(r["commission_amount"]) == 2.0, r if s != 201 else r["total_amount"])
+check("extension charged immediately (ledger 5.00 + 5.00)", abs(float(psql(f"select sum(amount) from transactions where booking_id='{ex['id']}' and type='charge'")) - 10.0) < 0.01)
+nxt_start = datetime.fromisoformat(r["booked_end"].replace("Z", "+00:00")) + timedelta(minutes=15)
+s, nb = book(D, ids["kx"], nxt_start, hours=1)
+s, r = call("POST", f"/bookings/{ex['id']}/extend", {"hours": 3}, D)
+check("extension blocked when the next booking follows", s == 409, (s, r))
+
+print("Overstay flow")
+s, a = book(D, ids["shoreditch"], now + timedelta(days=40)); shift_to_past(a["id"])
+s, b = book(D, ids["camden"], now + timedelta(days=41)); shift_to_past(b["id"])
+s, c = book(D, ids["islington"], now + timedelta(days=42)); shift_to_past(c["id"])
+psql(f"update bookings set overstay_check='asked', overstay_asked_at = now() - interval '2 hours' where id='{c['id']}'")
+
+print("Reminders")
+s, soon = book(D, ids["euston"], now + timedelta(minutes=20), hours=1)
+
+print("  ...waiting for scheduler (up to 60s)")
+wait_for(lambda: psql(f"select overstay_check from bookings where id='{a['id']}'") == "asked"
+         and psql(f"select overstay_check from bookings where id='{b['id']}'") == "asked"
+         and status_of(c["id"]) == "completed" and status_of(exp["id"]) == "cancelled", 60)
+
+check("expired request released automatically", status_of(exp["id"]) == "cancelled" and ledger(exp["id"]) == {})
+check("overstay check asked after grace", psql(f"select overstay_check from bookings where id='{a['id']}'") == "asked")
+check("host was notified 'Is the car still there?'", psql(f"select count(*) from notifications where ref_id='{a['id']}' and type='overstay_check'") == "1")
+check("silent host: auto-end at booked end with no fee",
+      status_of(c["id"]) == "completed" and "overstay_fee" not in ledger(c["id"]) and
+      psql(f"select actual_ended_at = booked_end from bookings where id='{c['id']}'") == "t")
+s, r = call("POST", f"/bookings/{b['id']}/car-status", {"stillThere": False}, H)
+check("host says car gone -> ends at booked end, no fee", r["status"] == "completed" and "overstay_fee" not in ledger(b["id"]), r.get("status"))
+s, r = call("POST", f"/bookings/{a['id']}/car-status", {"stillThere": True}, H)
+check("a different host cannot answer for someone else's booking", s == 400)
+s, r = call("POST", f"/bookings/{a['id']}/car-status", {"stillThere": True}, OMAR)
+check("host confirms car still there -> overstay", s == 201 and r["status"] == "overstay" and r["overstay_fee_now"] > 0, (s, r if s != 201 else r["status"]))
+s, r = call("POST", f"/bookings/{a['id']}/end", None, D)
+lg = ledger(a["id"])
+fee = lg.get("overstay_fee", 0)
+check("overstay fee = 1.5 x hourly x hours started (shoreditch 2.20/h)", s == 201 and abs(fee - 1 * 2.20 * 1.5) < 0.011, (s, lg))
+check("overstay fee split 80/20 into ledger", abs(lg["commission"] + lg["host_earning"] - (float(a["total_amount"]) + fee)) < 0.02, lg)
+
+print("Notifications")
+s, n = call("GET", "/me/notifications", token=D)
+types = {i["type"] for i in n["items"]}
+check("driver received booking_confirmed, booking_ended", {"booking_confirmed", "booking_ended"} <= types, types)
+check("driver got a start reminder for the booking 20 min away", wait_for(lambda: psql(f"select count(*) from notifications where ref_id='{soon['id']}' and type='reminder_start'") == "1", 30))
+check("overstay warning sent to driver", "overstay_warning" in {i['type'] for i in call("GET", "/me/notifications", token=D)[1]["items"]})
+check("unread count reported", n["unread"] > 0)
+call("POST", "/me/notifications/read", None, D)
+s, n = call("GET", "/me/notifications", token=D)
+check("mark all read", n["unread"] == 0)
+s, n = call("GET", "/me/notifications", token=H)
+check("host received new-booking notifications", any(i["type"] == "booking_confirmed" for i in n["items"]))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

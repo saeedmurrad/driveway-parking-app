@@ -14,7 +14,9 @@ insert into settings (key, value) values
   ('grace_minutes', '15'),
   ('dispute_window_minutes', '2'),
   ('overstay_multiplier', '1.5'),
-  ('min_payout_gbp', '10');
+  ('min_payout_gbp', '10'),
+  ('overstay_response_minutes', '60'),
+  ('request_response_minutes', '30');
 
 create table users (
   id uuid primary key default gen_random_uuid(),
@@ -172,6 +174,9 @@ create table bookings (
   cancelled_by text,
   cancel_reason text,
   stripe_payment_intent text,
+  respond_by timestamptz,                      -- request-to-book: host must answer before this
+  overstay_check text check (overstay_check in ('asked','gone','still_there')),
+  overstay_asked_at timestamptz,
   created_at timestamptz not null default now(),
   check (booked_end > booked_start),
   -- NO DOUBLE BOOKING: enforced by the database, not application code.
@@ -266,8 +271,12 @@ create table notifications (
   title text not null,
   body text,
   read boolean not null default false,
+  ref_type text,   -- 'booking' | 'offer' | 'dispute'
+  ref_id uuid,
+  channels text[] not null default '{push}',
   created_at timestamptz not null default now()
 );
+create index notifications_user_idx on notifications (user_id, created_at desc);
 
 create table admin_audit_log (
   id uuid primary key default gen_random_uuid(),

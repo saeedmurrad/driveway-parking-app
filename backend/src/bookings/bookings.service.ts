@@ -5,13 +5,19 @@ import { DbService } from '../db/db.service';
 import { SettingsService } from '../settings/settings.service';
 import { calculatePrice } from './pricing';
 import { refundPercent } from './policy';
+import { NotificationsService } from '../notifications/notifications.service';
 
+const fmt = (d: Date | string) => new Date(d).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const PAID = ['confirmed', 'parked', 'overstay', 'completed'];
 
 @Injectable()
 export class BookingsService {
-  constructor(private readonly db: DbService, private readonly settings: SettingsService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly settings: SettingsService,
+    private readonly notes: NotificationsService,
+  ) {}
 
   async quote(listingId: string, start: Date, end: Date) {
     const { rows } = await this.db.query('select price_hour, price_day from listings where id = $1', [listingId]);
@@ -73,17 +79,122 @@ export class BookingsService {
    */
   async pay(driverId: string, id: string) {
     return this.db.tx(async (c) => {
-      const { rows } = await c.query(
-        `update bookings set status = 'confirmed', stripe_payment_intent = $3
-         where id = $1 and driver_id = $2 and status = 'pending_payment' returning *`,
-        [id, driverId, 'mock_pi_' + randomBytes(6).toString('hex')]);
-      if (!rows[0]) throw new BadRequestException('Booking is not awaiting payment (it may have expired)');
-      await c.query(
-        `insert into transactions (booking_id, user_id, type, amount, provider_ref) values ($1,$2,'charge',$3,$4)`,
-        [id, driverId, rows[0].total_amount, rows[0].stripe_payment_intent]);
-      await this.event(c, id, 'paid', 'driver', driverId);
-      await this.event(c, id, 'confirmed', 'system');
+      const cur = (await c.query(
+        `select b.*, l.booking_mode, l.title from bookings b join listings l on l.id = b.listing_id
+         where b.id = $1 and b.driver_id = $2 and b.status = 'pending_payment' for update of b`, [id, driverId])).rows[0];
+      if (!cur) throw new BadRequestException('Booking is not awaiting payment (it may have expired)');
+      const ref: [string, string] = ['booking', id];
+      const pi = 'mock_pi_' + randomBytes(6).toString('hex');
+
+      if (cur.booking_mode === 'request') {
+        // Card is authorised (held), not charged. The host has a limited time to answer.
+        const mins = await this.settings.getNumber('request_response_minutes');
+        const respondBy = new Date(Math.min(Date.now() + mins * 60_000, new Date(cur.booked_start).getTime()));
+        await c.query(`update bookings set status = 'requested', stripe_payment_intent = $2, respond_by = $3 where id = $1`, [id, pi, respondBy]);
+        await this.event(c, id, 'requested', 'driver', driverId);
+        await this.notes.notify(cur.host_id, 'booking_request', 'New booking request',
+          `${cur.title} · ${fmt(cur.booked_start)}. Accept within ${Math.max(1, Math.round((respondBy.getTime() - Date.now()) / 60_000))} minutes.`, { ref, channels: ['push'], client: c });
+        await this.notes.notify(driverId, 'booking_request', 'Request sent',
+          `Your card is on hold. ${cur.title} will confirm once the host accepts.`, { ref, client: c });
+        return this.detail(driverId, id, c);
+      }
+
+      await c.query(`update bookings set status = 'confirmed', stripe_payment_intent = $2 where id = $1`, [id, pi]);
+      await this.capture(c, cur, pi);
       return this.detail(driverId, id, c);
+    });
+  }
+
+  /** Takes the money (ledger charge), confirms and notifies. Used by instant pay and by host acceptance. */
+  private async capture(c: PoolClient, b: any, pi: string) {
+    await c.query(
+      `insert into transactions (booking_id, user_id, type, amount, provider_ref) values ($1,$2,'charge',$3,$4)`,
+      [b.id, b.driver_id, b.total_amount, pi]);
+    await this.event(c, b.id, 'paid', 'driver', b.driver_id);
+    await this.event(c, b.id, 'confirmed', 'system');
+    const t = (await c.query('select title from listings where id = $1', [b.listing_id])).rows[0].title;
+    const ref: [string, string] = ['booking', b.id];
+    await this.notes.notify(b.driver_id, 'booking_confirmed', 'Booking confirmed',
+      `${t} · ${fmt(b.booked_start)}. Your address and access instructions are ready.`, { ref, channels: ['push', 'email'], client: c });
+    await this.notes.notify(b.host_id, 'booking_confirmed', 'New booking',
+      `${t} · ${fmt(b.booked_start)} · you earn £${Number(b.host_earnings).toFixed(2)}.`, { ref, channels: ['push', 'email'], client: c });
+  }
+
+  /** Host answers a request-to-book. Accept captures the held card; decline releases it. */
+  async respond(hostId: string, id: string, accept: boolean) {
+    return this.db.tx(async (c) => {
+      const b = (await c.query(
+        `select * from bookings where id = $1 and host_id = $2 and status = 'requested' for update`, [id, hostId])).rows[0];
+      if (!b) throw new BadRequestException('This request is no longer open');
+      if (b.respond_by && new Date(b.respond_by) < new Date()) throw new BadRequestException('The response time has passed');
+      const ref: [string, string] = ['booking', id];
+      if (accept) {
+        await c.query(`update bookings set status = 'confirmed' where id = $1`, [id]);
+        await this.event(c, id, 'accepted', 'host', hostId);
+        await this.capture(c, b, b.stripe_payment_intent);
+      } else {
+        await c.query(`update bookings set status = 'cancelled', cancelled_by = 'host', cancel_reason = 'declined' where id = $1`, [id]);
+        await this.event(c, id, 'declined', 'host', hostId);
+        await this.notes.notify(b.driver_id, 'booking_declined', 'Request declined',
+          `The host declined booking ${b.reference}. Your card hold has been released, so you were not charged.`, { ref, channels: ['push', 'email'], client: c });
+      }
+      return this.detail(hostId, id, c);
+    });
+  }
+
+  /** Extend the end time while the booking is active. Charged straight away at the hourly rate. */
+  async extend(driverId: string, id: string, hours: number) {
+    return this.db.tx(async (c) => {
+      const b = (await c.query(
+        `select b.*, l.price_hour, l.max_stay_minutes from bookings b join listings l on l.id = b.listing_id
+         where b.id = $1 and b.driver_id = $2 and b.status in ('confirmed','parked') and b.booked_end > now() for update of b`,
+        [id, driverId])).rows[0];
+      if (!b) throw new BadRequestException('You can only extend a booking that has not ended yet');
+      const newEnd = new Date(new Date(b.booked_end).getTime() + hours * 3_600_000);
+      if ((newEnd.getTime() - new Date(b.booked_start).getTime()) / 60_000 > b.max_stay_minutes) throw new BadRequestException('That goes over this space\'s maximum stay');
+      const open = (await c.query('select listing_available($1,$2,$3) as ok', [b.listing_id, b.booked_end, newEnd])).rows[0].ok;
+      if (!open) throw new ConflictException('The host is not offering the space for that extra time');
+      const extra = r2(hours * Number(b.price_hour));
+      const total = r2(Number(b.total_amount) + extra);
+      const commission = r2(total * Number(b.commission_rate));
+      const buffer = (await c.query('select buffer_minutes from listings where id = $1', [b.listing_id])).rows[0].buffer_minutes;
+      try {
+        await c.query(
+          `update bookings set booked_end = $2, blocked_end = $3, parking_amount = parking_amount + $4, total_amount = $5,
+             commission_amount = $6, host_earnings = $7 where id = $1`,
+          [id, newEnd, new Date(newEnd.getTime() + buffer * 60_000), extra, total, commission, r2(total - commission)]);
+      } catch (e: any) {
+        if (e.code === '23P01') throw new ConflictException('Sorry, the space is booked right after yours');
+        throw e;
+      }
+      await c.query(`insert into transactions (booking_id, user_id, type, amount, provider_ref) values ($1,$2,'charge',$3,$4)`,
+        [id, driverId, extra, 'mock_ext_' + randomBytes(4).toString('hex')]);
+      await this.event(c, id, 'extended', 'driver', driverId);
+      await this.notes.notify(b.host_id, 'booking_extended', 'Booking extended',
+        `Booking ${b.reference} now ends ${fmt(newEnd)} (+£${extra.toFixed(2)}).`, { ref: ['booking', id], client: c });
+      return this.detail(driverId, id, c);
+    });
+  }
+
+  /** Host answers the "is the car still there?" prompt after the grace period. */
+  async carStatus(hostId: string, id: string, stillThere: boolean) {
+    return this.db.tx(async (c) => {
+      const b = (await c.query(
+        `select * from bookings where id = $1 and host_id = $2 and status = 'parked' and overstay_check = 'asked' for update`,
+        [id, hostId])).rows[0];
+      if (!b) throw new BadRequestException('Nothing to confirm for this booking');
+      const ref: [string, string] = ['booking', id];
+      if (!stillThere) {
+        await c.query(`update bookings set overstay_check = 'gone' where id = $1`, [id]);
+        await this.complete(c, { ...b, overstay_check: 'gone' }, 'system', null, 'auto_ended', true);
+      } else {
+        await c.query(`update bookings set status = 'overstay', overstay_check = 'still_there' where id = $1`, [id]);
+        await this.event(c, id, 'overstay', 'host', hostId);
+        await this.notes.notify(b.driver_id, 'overstay', 'Overstay: fees now apply',
+          `Your car is still at the space after booking ${b.reference} ended. An overstay fee is charged per extra hour until you tap End Booking.`,
+          { ref, channels: ['push', 'sms'], client: c });
+      }
+      return this.detail(hostId, id, c);
     });
   }
 
@@ -95,6 +206,8 @@ export class BookingsService {
            and now() >= booked_start - interval '15 minutes' and now() <= booked_end returning id`, [id, userId]);
       if (!rows[0]) throw new BadRequestException("You can tap I've Parked from 15 minutes before the start until the end");
       await this.event(c, id, 'parked', 'driver', userId, geo);
+      const b = (await c.query('select host_id, reference from bookings where id = $1', [id])).rows[0];
+      await this.notes.notify(b.host_id, 'parked', 'Car has arrived', `Booking ${b.reference}: the driver has parked.`, { ref: ['booking', id], client: c });
       return this.detail(userId, id, c);
     });
   }
@@ -108,13 +221,31 @@ export class BookingsService {
     });
   }
 
-  /** Completing a booking posts the commission + host earning to the ledger. */
-  async complete(c: PoolClient, b: any, actor: 'driver' | 'system', actorId: string | null, event: string) {
-    await c.query(`update bookings set status = 'completed', actual_ended_at = now() where id = $1`, [b.id]);
+  /** Completing a booking posts the commission + host earning to the ledger (plus any overstay fee). */
+  async complete(c: PoolClient, b: any, actor: 'driver' | 'system', actorId: string | null, event: string, atBookedEnd = false) {
+    await c.query(`update bookings set status = 'completed', actual_ended_at = case when $2 then booked_end else now() end where id = $1`, [b.id, atBookedEnd]);
     await c.query(
       `insert into transactions (booking_id, user_id, type, amount) values ($1,null,'commission',$2), ($1,$3,'host_earning',$4)`,
       [b.id, b.commission_amount, b.host_id, b.host_earnings]);
     await this.event(c, b.id, event, actor, actorId);
+    const ref: [string, string] = ['booking', b.id];
+    const why = event === 'auto_ended' ? 'was ended automatically' : 'has ended';
+    let extra = '';
+    if (b.status === 'overstay') {
+      // Overstay: per extra hour started, at multiplier x hourly rate; host gets the same share as normal bookings.
+      const l = (await c.query('select price_hour from listings where id = $1', [b.listing_id])).rows[0];
+      const mult = await this.settings.getNumber('overstay_multiplier');
+      const hours = Math.max(1, Math.ceil((Date.now() - new Date(b.booked_end).getTime()) / 3_600_000));
+      const fee = r2(hours * Number(l.price_hour) * mult);
+      const commission = r2(fee * Number(b.commission_rate));
+      await c.query(
+        `insert into transactions (booking_id, user_id, type, amount) values ($1,$2,'overstay_fee',$3), ($1,null,'commission',$4), ($1,$5,'host_earning',$6)`,
+        [b.id, b.driver_id, fee, commission, b.host_id, r2(fee - commission)]);
+      await c.query('update bookings set overstay_fee = $2 where id = $1', [b.id, fee]);
+      extra = ` An overstay fee of £${fee.toFixed(2)} (${hours}h) was charged.`;
+    }
+    await this.notes.notify(b.driver_id, 'booking_ended', 'Booking ended', `Booking ${b.reference} ${why}.${extra} Please rate your stay.`, { ref, client: c });
+    await this.notes.notify(b.host_id, 'booking_ended', 'Booking ended', `Booking ${b.reference} ${why}. You earned £${Number(b.host_earnings).toFixed(2)}.${extra ? ' Plus overstay fee income.' : ''}`, { ref, client: c });
   }
 
   async cancel(userId: string, id: string) {
@@ -124,8 +255,9 @@ export class BookingsService {
          where b.id = $1 and (b.driver_id = $2 or b.host_id = $2) for update of b`, [id, userId])).rows[0];
       if (!b) throw new NotFoundException();
       const byHost = b.host_id === userId;
-      if (b.status === 'pending_payment') {
-        await c.query(`update bookings set status = 'cancelled', cancelled_by = 'driver', cancel_reason = 'abandoned' where id = $1`, [id]);
+      if (b.status === 'pending_payment' || (b.status === 'requested' && !byHost)) {
+        await c.query(`update bookings set status = 'cancelled', cancelled_by = 'driver', cancel_reason = $2 where id = $1`,
+          [id, b.status === 'requested' ? 'request withdrawn' : 'abandoned']);
         await this.event(c, id, 'cancelled', 'driver', userId);
         return this.detail(userId, id, c);
       }
@@ -147,6 +279,11 @@ export class BookingsService {
       }
       await this.event(c, id, 'cancelled', byHost ? 'host' : 'driver', userId);
       if (refund > 0) await this.event(c, id, 'refunded', 'system');
+      const ref: [string, string] = ['booking', id];
+      const other = byHost ? b.driver_id : b.host_id;
+      await this.notes.notify(other, 'booking_cancelled', 'Booking cancelled',
+        `Booking ${b.reference} was cancelled by the ${byHost ? 'host' : 'driver'}.`, { ref, channels: ['push', 'email'], client: c });
+      if (refund > 0) await this.notes.notify(b.driver_id, 'refund', 'Refund issued', `£${refund.toFixed(2)} refunded for booking ${b.reference}.`, { ref, channels: ['push', 'email'], client: c });
       return this.detail(userId, id, c);
     });
   }
@@ -189,6 +326,13 @@ export class BookingsService {
     if (b.status === 'confirmed') {
       const pct = b.host_id === userId ? 100 : refundPercent(b.cancellation_policy, b.booked_start, b.created_at);
       b.cancel_quote = { percent: pct, amount: r2((Number(b.total_amount) * pct) / 100) };
+    }
+    if (b.status === 'overstay') {
+      const mult = await this.settings.getNumber('overstay_multiplier');
+      const hours = Math.max(1, Math.ceil((Date.now() - new Date(b.booked_end).getTime()) / 3_600_000));
+      const ph = (await q('select price_hour from listings where id = $1', [b.listing_id])).rows[0].price_hour;
+      b.overstay_fee_now = r2(hours * Number(ph) * mult);
+      b.overstay_hours = hours;
     }
     b.viewer = isDriver ? 'driver' : b.host_id === userId ? 'host' : 'admin';
     return b;

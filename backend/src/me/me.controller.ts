@@ -5,6 +5,7 @@ import { AuthService, AuthUser } from '../auth/auth.service';
 import { AuthGuard, CurrentUser } from '../auth/auth.guard';
 import { BookingsService } from '../bookings/bookings.service';
 import { SettingsService } from '../settings/settings.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 class VehicleDto {
   @IsString() @MinLength(2) plate: string;
@@ -25,6 +26,7 @@ export class MeController {
   constructor(
     private readonly db: DbService, private readonly bookings: BookingsService,
     private readonly settings: SettingsService, private readonly auth: AuthService,
+    private readonly notes: NotificationsService,
   ) {}
 
   @Get('vehicles') async vehicles(@CurrentUser() u: AuthUser) {
@@ -41,6 +43,9 @@ export class MeController {
     await this.db.query('update users set is_host = true where id = $1', [u.id]);
     return this.auth.refresh(u.id);
   }
+
+  @Get('notifications') notifications(@CurrentUser() u: AuthUser) { return this.notes.list(u.id); }
+  @Post('notifications/read') readAll(@CurrentUser() u: AuthUser) { return this.notes.markAllRead(u.id); }
 
   @Get('bookings') driverBookings(@CurrentUser() u: AuthUser) { return this.bookings.listFor(u.id, 'driver'); }
   @Get('host-bookings') hostBookings(@CurrentUser() u: AuthUser) { return this.bookings.listFor(u.id, 'host'); }
@@ -89,6 +94,7 @@ export class MeController {
         `insert into payouts (host_id, amount, provider_ref, status, sent_at) values ($1,$2,$3,'paid',now()) returning *`,
         [u.id, s.available, 'mock_po_' + Date.now()])).rows[0];
       await c.query(`insert into transactions (user_id, type, amount, provider_ref) values ($1,'payout',$2,$3)`, [u.id, s.available, p.provider_ref]);
+      await this.notes.notify(u.id, 'payout', 'Payout sent', `£${s.available.toFixed(2)} is on its way to your bank.`, { channels: ['push', 'email'], client: c });
       return p;
     });
   }

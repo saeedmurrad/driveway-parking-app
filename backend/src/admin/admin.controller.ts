@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { DbService } from '../db/db.service';
 import { AdminGuard } from '../auth/auth.guard';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const EDITABLE: Record<string, [number, number]> = {
   commission_rate: [0, 0.5], grace_minutes: [0, 240], dispute_window_minutes: [0, 10080],
@@ -10,7 +11,7 @@ const EDITABLE: Record<string, [number, number]> = {
 @Controller('admin')
 @UseGuards(AdminGuard)
 export class AdminController {
-  constructor(private readonly db: DbService) {}
+  constructor(private readonly db: DbService, private readonly notes: NotificationsService) {}
 
   @Get('stats') async stats() {
     const one = async (sql: string) => (await this.db.query(sql)).rows[0];
@@ -33,9 +34,15 @@ export class AdminController {
 
   @Post('listings/:id/status') async setListingStatus(@Param('id') id: string, @Body('status') status: string) {
     if (!['live', 'rejected', 'paused', 'removed'].includes(status)) throw new BadRequestException('Bad status');
-    const { rows } = await this.db.query('update listings set status = $2 where id = $1 returning id, status', [id, status]);
+    const { rows } = await this.db.query('update listings set status = $2 where id = $1 returning id, status, host_id, title', [id, status]);
     if (!rows[0]) throw new NotFoundException();
-    return rows[0];
+    if (status === 'live' || status === 'rejected') {
+      await this.notes.notify(rows[0].host_id, status === 'live' ? 'listing_approved' : 'listing_rejected',
+        status === 'live' ? 'Your space is live' : 'Your space was not approved',
+        status === 'live' ? `${rows[0].title} is now visible to drivers.` : `${rows[0].title} needs changes before it can go live.`,
+        { channels: ['push', 'email'] });
+    }
+    return { id: rows[0].id, status: rows[0].status };
   }
 
   @Get('bookings') async bookings() {

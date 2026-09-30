@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
-import { IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 import { AuthUser } from '../auth/auth.service';
 import { AuthGuard, CurrentUser } from '../auth/auth.guard';
 import { BookingsService } from './bookings.service';
@@ -14,6 +14,9 @@ class GeoDto {
   @IsOptional() @IsNumber() latitude?: number;
   @IsOptional() @IsNumber() longitude?: number;
 }
+class RespondDto { @IsBoolean() accept: boolean; }
+class ExtendDto { @IsInt() @Min(1) @Max(24) hours: number; }
+class CarDto { @IsBoolean() stillThere: boolean; }
 class ReviewDto {
   @IsInt() @Min(1) @Max(5) stars: number;
   @IsOptional() @IsString() comment?: string;
@@ -30,5 +33,8 @@ export class BookingsController {
   @Post(':id/parked') parked(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() g: GeoDto) { return this.svc.markParked(u.id, id, g); }
   @Post(':id/end') end(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.end(u.id, id); }
   @Post(':id/cancel') cancel(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.cancel(u.id, id); }
+  @Post(':id/respond') respond(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: RespondDto) { return this.svc.respond(u.id, id, d.accept); }
+  @Post(':id/extend') extend(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: ExtendDto) { return this.svc.extend(u.id, id, d.hours); }
+  @Post(':id/car-status') car(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: CarDto) { return this.svc.carStatus(u.id, id, d.stillThere); }
   @Post(':id/review') review(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() d: ReviewDto) { return this.svc.review(u.id, id, d.stars, d.comment); }
 }
