@@ -8,6 +8,7 @@ import 'explore.dart';
 import 'host_dashboard.dart';
 import 'host_earnings.dart';
 import 'host_listings.dart';
+import 'offers.dart';
 import 'notifications.dart';
 import 'profile.dart';
 import 'spending.dart';
@@ -27,12 +28,14 @@ class _ShellState extends State<Shell> {
         Mode.driver => [
             (Icons.map_outlined, Icons.map, 'Explore', const ExploreScreen()),
             (Icons.confirmation_number_outlined, Icons.confirmation_number, 'Bookings', const DriverBookings()),
+            (Icons.handshake_outlined, Icons.handshake, 'Offers', const OffersScreen()),
             (Icons.receipt_long_outlined, Icons.receipt_long, 'Spending', const SpendingScreen()),
             (Icons.person_outline, Icons.person, 'Profile', const ProfileScreen()),
           ],
         Mode.host => [
             (Icons.dashboard_outlined, Icons.dashboard, 'Dashboard', const HostDashboard()),
             (Icons.home_work_outlined, Icons.home_work, 'My spaces', const HostListings()),
+            (Icons.handshake_outlined, Icons.handshake, 'Offers', const OffersScreen()),
             (Icons.account_balance_wallet_outlined, Icons.account_balance_wallet, 'Earnings', const HostEarnings()),
             (Icons.person_outline, Icons.person, 'Profile', const ProfileScreen()),
           ],

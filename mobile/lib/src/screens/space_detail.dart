@@ -4,6 +4,7 @@ import '../api.dart';
 import '../state.dart';
 import '../ui.dart';
 import 'booking_detail.dart';
+import 'offers.dart';
 
 class SpaceDetail extends StatefulWidget {
   const SpaceDetail({super.key, required this.listingId, required this.start, required this.end});
@@ -61,6 +62,15 @@ class _SpaceDetailState extends State<SpaceDetail> {
     } catch (e) {
       if (mounted) toast(context, '$e', error: true);
     }
+  }
+
+  Future<void> _offer(Json l) async {
+    final s = context.read<AppState>();
+    final thread = await showMakeOffer(context,
+        listingId: widget.listingId, title: l['title'], listedTotal: num_(l['quote']['total']),
+        start: widget.start, end: widget.end, vehicleId: s.vehicle?['id']);
+    if (thread == null || !mounted) return;
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => OfferThreadScreen(threadId: thread)));
   }
 
   Future<void> _book(Json l) async {
@@ -144,6 +154,17 @@ class _SpaceDetailState extends State<SpaceDetail> {
                     const Divider(height: 22),
                     _row('Total', money(q['total']), bold: true),
                   ]))),
+                  if (l['booking_mode'] == 'request') ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(color: const Color(0xFFFFF0C9), borderRadius: BorderRadius.circular(12)),
+                      child: const Row(children: [
+                        Icon(Icons.how_to_reg_outlined, color: Color(0xFF8A5B00)), SizedBox(width: 10),
+                        Expanded(child: Text("Request to book: the host approves each booking. Your card is held, not charged, until they accept (usually within 30 minutes).", style: TextStyle(color: Color(0xFF8A5B00), fontWeight: FontWeight.w600))),
+                      ]),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     const Row(children: [Icon(Icons.lock_outline, size: 18), SizedBox(width: 8), Text('Address shared after payment', style: TextStyle(fontWeight: FontWeight.w700))]),
@@ -178,9 +199,13 @@ class _SpaceDetailState extends State<SpaceDetail> {
                       Text('total for $hours h', style: const TextStyle(fontSize: 12, color: Colors.black54)),
                     ]),
                     const SizedBox(width: 20),
+                    if (l['allow_offers'] == true) ...[
+                      Expanded(child: OutlinedButton(onPressed: _busy ? null : () => _offer(l), child: const Text('Make an offer'))),
+                      const SizedBox(width: 8),
+                    ],
                     Expanded(child: FilledButton(
                       onPressed: _busy ? null : () => _book(l),
-                      child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Book now'),
+                      child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Text(l['booking_mode'] == 'request' ? 'Request to book' : 'Book now'),
                     )),
                   ]),
                 )),
