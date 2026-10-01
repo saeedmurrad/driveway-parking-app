@@ -51,7 +51,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(colors: [Color(0xFF1234A8), Color(0xFF2D6BFF)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+          gradient: heroGradient,
         ),
         child: Center(
           child: SingleChildScrollView(
@@ -61,7 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(children: [
                 Container(
                   width: 72, height: 72,
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24), boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 24, offset: Offset(0, 10))]),
                   child: const Center(child: Text('P', style: TextStyle(fontSize: 44, fontWeight: FontWeight.w900, color: brand))),
                 ),
                 const SizedBox(height: 14),

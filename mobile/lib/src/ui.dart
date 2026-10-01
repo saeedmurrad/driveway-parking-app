@@ -3,7 +3,9 @@ import 'package:intl/intl.dart';
 
 export 'api.dart' show Json;
 
-const brand = Color(0xFF1F4FE0);
+const brand = Color(0xFF2350F0);
+const brandDark = Color(0xFF0F2FA8);
+const heroGradient = LinearGradient(colors: [Color(0xFF0F2FA8), Color(0xFF2F6BFF)], begin: Alignment.topLeft, end: Alignment.bottomRight);
 
 double num_(dynamic v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
 String money(dynamic v) => '£${num_(v).toStringAsFixed(2)}';
@@ -107,13 +109,13 @@ class StatTile extends StatelessWidget {
     final c = color ?? brand;
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             if (icon != null) Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
-              child: Icon(icon, size: 16, color: c),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12)),
+              child: Icon(icon, size: 18, color: c),
             ),
             if (icon != null) const SizedBox(width: 8),
             Expanded(child: Text(label, style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.black54))),
@@ -207,4 +209,37 @@ class Stars extends StatelessWidget {
           const SizedBox(width: 2),
           Text(num_(rating).toStringAsFixed(1), style: TextStyle(fontSize: size - 2, fontWeight: FontWeight.w600)),
         ]);
+}
+
+/// Gradient banner with a big headline number (earnings, spending, etc.).
+class HeroHeader extends StatelessWidget {
+  const HeroHeader({super.key, required this.eyebrow, required this.title, this.subtitle, this.trailing, this.children = const []});
+  final String eyebrow, title;
+  final String? subtitle;
+  final Widget? trailing;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
+        decoration: BoxDecoration(
+          gradient: heroGradient, borderRadius: BorderRadius.circular(26),
+          boxShadow: const [BoxShadow(color: Color(0x332350F0), blurRadius: 24, offset: Offset(0, 10))],
+        ),
+        child: Stack(children: [
+          Positioned(right: -30, top: -40, child: Container(width: 140, height: 140, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withValues(alpha: 0.08)))),
+          Positioned(right: 40, bottom: -50, child: Container(width: 100, height: 100, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withValues(alpha: 0.06)))),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Text(eyebrow, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13))),
+              ?trailing,
+            ]),
+            const SizedBox(height: 6),
+            Text(title, style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w800, height: 1.1)),
+            if (subtitle != null) Padding(padding: const EdgeInsets.only(top: 6), child: Text(subtitle!, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+            ...children,
+          ]),
+        ]),
+      );
 }

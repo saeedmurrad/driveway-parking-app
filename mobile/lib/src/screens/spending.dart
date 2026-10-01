@@ -25,9 +25,12 @@ class SpendingScreen extends StatelessWidget {
           onRefresh: reload,
           child: ListView(children: [
             Centered(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Your spending', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 4),
-              const Text('Calculated from your payment and refund history.', style: TextStyle(color: Colors.black54)),
+              HeroHeader(
+                eyebrow: 'Spent this month',
+                title: money(s['month']),
+                subtitle: '${money(s['allTime'])} all time · ${s['bookings']} bookings',
+                trailing: const Icon(Icons.receipt_long_outlined, color: Colors.white70),
+              ),
               const SizedBox(height: 14),
               LayoutBuilder(builder: (context, c) {
                 final w = (c.maxWidth - 12) / 2;

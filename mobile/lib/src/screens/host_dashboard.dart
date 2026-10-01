@@ -26,9 +26,12 @@ class HostDashboard extends StatelessWidget {
           onRefresh: reload,
           child: ListView(children: [
             Centered(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Hi ${'${s.user!['name']}'.split(' ').first} 👋', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 4),
-              const Text("Here's how your spaces are doing.", style: TextStyle(color: Colors.black54)),
+              HeroHeader(
+                eyebrow: 'Hi ${'${s.user!['name']}'.split(' ').first}, you can pay out',
+                title: money(sum['available']),
+                subtitle: '${money(sum['month'])} earned this month · ${money(sum['pending'])} pending',
+                trailing: const Icon(Icons.account_balance_wallet_outlined, color: Colors.white70),
+              ),
               const SizedBox(height: 14),
               LayoutBuilder(builder: (context, c) {
                 final w = (c.maxWidth - 12) / 2;

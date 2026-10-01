@@ -143,15 +143,19 @@ class _ExploreScreenState extends State<ExploreScreen> {
       _controls(context),
       Expanded(
         child: wide
-            ? Row(children: [SizedBox(width: 440, child: list), const VerticalDivider(width: 1), Expanded(child: map)])
+            ? Row(children: [SizedBox(width: 460, child: list), Expanded(child: map)])
             : Column(children: [Expanded(flex: 5, child: map), Expanded(flex: 5, child: list)]),
       ),
     ]);
   }
 
   Widget _controls(BuildContext context) => Container(
-        color: Colors.white,
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+          boxShadow: [BoxShadow(color: Color(0x141B2559), blurRadius: 16, offset: Offset(0, 6))],
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
         child: Column(children: [
           Row(children: [
             Expanded(
@@ -296,11 +300,11 @@ class _PricePin extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: selected ? Colors.black : brand, borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: const [BoxShadow(blurRadius: 6, color: Colors.black26)],
+            color: selected ? const Color(0xFF14171F) : brand, borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white, width: 2.5),
+            boxShadow: const [BoxShadow(blurRadius: 10, color: Color(0x40000000), offset: Offset(0, 3))],
           ),
-          child: Text('$text/h', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
+          child: Text('$text/h', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12.5)),
         ),
       ]);
 }
@@ -330,44 +334,54 @@ class _ResultList extends StatelessWidget {
         if (i == 0) return Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: Text('${results.length} space${results.length == 1 ? '' : 's'} available', style: const TextStyle(fontWeight: FontWeight.w600)));
         final l = results[i - 1];
         final feats = (l['features'] as List).cast<String>();
+        final isSel = l['id'] == selected;
         return Card(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: l['id'] == selected ? brand : const Color(0xFFE6E9F2), width: l['id'] == selected ? 2 : 1)),
+          elevation: isSel ? 6 : 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22), side: BorderSide(color: isSel ? brand : Colors.transparent, width: 2)),
           child: InkWell(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(22),
             onTap: () => onTap(l),
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
               child: Row(children: [
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(16),
                   child: SizedBox(
-                    width: 72, height: 72,
+                    width: 96, height: 96,
                     child: l['photo_url'] != null
                         ? Image.network(mediaUrl(l['photo_url']), fit: BoxFit.cover, errorBuilder: (_, _, _) => _thumbFallback(l))
                         : _thumbFallback(l),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(l['title'], maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                  const SizedBox(height: 2),
+                  Text(l['title'], maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                  const SizedBox(height: 3),
                   Row(children: [
                     Stars(l['rating']),
-                    Text('  ·  ${(num_(l['distance_m']) / 1000).toStringAsFixed(1)} km  ·  ${(num_(l['distance_m']) / 80).ceil()} min walk  ·  ${l['host_name']}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                    Flexible(child: Text('   ${(num_(l['distance_m']) / 80).ceil()} min walk · ${l['host_name']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.black54))),
                   ]),
-                  const SizedBox(height: 6),
-                  Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                    for (final f in feats.take(4)) Icon(featureIcons[f]?.$1 ?? Icons.check, size: 16, color: Colors.black45),
-                    if (l['booking_mode'] == 'request') const Icon(Icons.how_to_reg_outlined, size: 16, color: Colors.orange),
-                    if (l['allow_offers'] == true) const Icon(Icons.handshake_outlined, size: 16, color: Colors.teal),
+                  const SizedBox(height: 8),
+                  Wrap(spacing: 6, runSpacing: 4, children: [
+                    for (final f in feats.take(3))
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(color: const Color(0xFFF0F3FB), borderRadius: BorderRadius.circular(20)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(featureIcons[f]?.$1 ?? Icons.check, size: 12, color: Colors.black54), const SizedBox(width: 4),
+                          Text(featureIcons[f]?.$2 ?? f, style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: Colors.black54)),
+                        ]),
+                      ),
+                    if (l['booking_mode'] == 'request') _tag('Request', Colors.orange),
+                    if (l['allow_offers'] == true) _tag('Offers', Colors.teal),
                   ]),
                 ])),
+                const SizedBox(width: 8),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  Text(money(l['quote']['total']), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+                  Text(money(l['quote']['total']), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 20, color: brand)),
                   Text('for ${hours == 24 ? '1 day' : '${hours}h'}', style: const TextStyle(fontSize: 11, color: Colors.black54)),
-                  Text('${money(l['price_hour'])}/h', style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                  const SizedBox(height: 4),
+                  Text('${money(l['price_hour'])}/h', style: const TextStyle(fontSize: 11, color: Colors.black45)),
                 ]),
               ]),
             ),
@@ -381,4 +395,10 @@ class _ResultList extends StatelessWidget {
 Widget _thumbFallback(Json l) => Container(
       decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFFDDE7FF), Color(0xFFB9CDFF)], begin: Alignment.topLeft, end: Alignment.bottomRight)),
       child: Icon(spaceIcons[l['space_type']] ?? Icons.local_parking, color: brand, size: 30),
+    );
+
+Widget _tag(String t, Color c) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+      child: Text(t, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: c)),
     );

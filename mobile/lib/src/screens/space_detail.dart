@@ -170,10 +170,12 @@ class _SpaceDetailState extends State<SpaceDetail> {
           return Stack(children: [
             ListView(padding: EdgeInsets.zero, children: [
               _Gallery(photos: (l['photos'] as List).cast<Map>(), fallbackIcon: spaceIcons[l['space_type']] ?? Icons.local_parking),
-              Centered(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+              Transform.translate(offset: const Offset(0, -26), child: Container(
+                decoration: const BoxDecoration(color: Color(0xFFF5F6FB), borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+                child: Centered(
+                padding: const EdgeInsets.fromLTRB(16, 22, 16, 110),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(l['title'], style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+                  Text(l['title'], style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800, height: 1.15)),
                   const SizedBox(height: 6),
                   Row(children: [
                     Stars(l['rating'], size: 18),
@@ -239,7 +241,7 @@ class _SpaceDetailState extends State<SpaceDetail> {
                         title: Row(children: [Text(r['name']), const SizedBox(width: 8), Stars(r['stars'], size: 14)]), subtitle: Text(r['comment'] ?? '')),
                   ],
                 ]),
-              ),
+              ))),
             ]),
             Positioned(
               left: 0, right: 0, bottom: 0,
