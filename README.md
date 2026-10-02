@@ -3,6 +3,11 @@
 Two-sided marketplace: hosts rent out driveways, drivers find, book and prepay. Platform keeps 20%.
 Full requirements: [Developer Specification (PDF)](docs/Driveway-Parking-App-Developer-Specification.pdf).
 
+## Live demo
+
+- **App:** https://saeedmurrad.github.io/driveway-parking-app/ (use the Driver / Host / Admin demo buttons)
+- **API health:** https://parkspace-api.onrender.com/health (the free tier sleeps when idle, so the first load can take about a minute)
+
 ## Architecture (all free tier)
 
 | Layer | Tech | Hosted on |
