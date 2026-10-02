@@ -8,7 +8,10 @@ const brandDark = Color(0xFF0F2FA8);
 const heroGradient = LinearGradient(colors: [Color(0xFF0F2FA8), Color(0xFF2F6BFF)], begin: Alignment.topLeft, end: Alignment.bottomRight);
 
 double num_(dynamic v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
-String money(dynamic v) => '£${num_(v).toStringAsFixed(2)}';
+String money(dynamic v) {
+  final n = num_(v);
+  return '${n < 0 ? '-' : ''}£${n.abs().toStringAsFixed(2)}';
+}
 DateTime dt(dynamic v) => DateTime.parse('$v').toLocal();
 String fmtDay(DateTime d) => DateFormat('EEE d MMM').format(d);
 String fmtTime(DateTime d) => DateFormat('HH:mm').format(d);

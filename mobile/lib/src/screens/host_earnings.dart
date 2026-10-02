@@ -70,8 +70,9 @@ class HostEarnings extends StatelessWidget {
                   Expanded(child: Text('${money(s['frozen'])} is on hold while a reported problem is reviewed.', style: const TextStyle(color: Color(0xFFB34700), fontWeight: FontWeight.w600))),
                 ]),
               ),
-              Row(children: [
-                const Expanded(child: Text('Statements', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+              const Text('Statements', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
                 OutlinedButton.icon(
                   icon: const Icon(Icons.download, size: 18), label: const Text('This month (CSV)'),
                   onPressed: () async {
@@ -85,7 +86,6 @@ class HostEarnings extends StatelessWidget {
                     }
                   },
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton(
                   onPressed: () async {
                     final csv = await api.getText('/me/statement.csv', query: {'role': 'host'});

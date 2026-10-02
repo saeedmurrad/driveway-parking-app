@@ -137,19 +137,29 @@ class _AvailabilityScreenState extends State<AvailabilityScreen> {
                     const SizedBox(height: 12),
                     Card(child: Column(children: [
                       for (final d in _days)
-                        ListTile(
-                          title: Text(d.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
-                          leading: Switch(
-                            value: _week[d.$1] != null,
-                            onChanged: (v) => setState(() => _week[d.$1] = v ? (const TimeOfDay(hour: 8, minute: 0), const TimeOfDay(hour: 18, minute: 0)) : null),
-                          ),
-                          trailing: _week[d.$1] == null
-                              ? const Text('Closed', style: TextStyle(color: Colors.black45))
-                              : Row(mainAxisSize: MainAxisSize.min, children: [
-                                  OutlinedButton(style: OutlinedButton.styleFrom(minimumSize: const Size(0, 36)), onPressed: () => _pick(d.$1, true), child: Text(_week[d.$1]!.$1.format(context))),
-                                  const Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Text('–')),
-                                  OutlinedButton(style: OutlinedButton.styleFrom(minimumSize: const Size(0, 36)), onPressed: () => _pick(d.$1, false), child: Text(_week[d.$1]!.$2.format(context))),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          child: Column(children: [
+                            Row(children: [
+                              Switch(
+                                value: _week[d.$1] != null,
+                                onChanged: (v) => setState(() => _week[d.$1] = v ? (const TimeOfDay(hour: 8, minute: 0), const TimeOfDay(hour: 18, minute: 0)) : null),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(d.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
+                              const Spacer(),
+                              if (_week[d.$1] == null) const Text('Closed', style: TextStyle(color: Colors.black45)),
+                            ]),
+                            if (_week[d.$1] != null)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 60, top: 2),
+                                child: Row(children: [
+                                  Expanded(child: OutlinedButton(style: OutlinedButton.styleFrom(minimumSize: const Size(0, 38)), onPressed: () => _pick(d.$1, true), child: Text(_week[d.$1]!.$1.format(context)))),
+                                  const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('to')),
+                                  Expanded(child: OutlinedButton(style: OutlinedButton.styleFrom(minimumSize: const Size(0, 38)), onPressed: () => _pick(d.$1, false), child: Text(_week[d.$1]!.$2.format(context)))),
                                 ]),
+                              ),
+                          ]),
                         ),
                     ])),
                   ],

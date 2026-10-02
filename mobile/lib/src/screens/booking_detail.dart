@@ -258,7 +258,7 @@ class _BookingDetailState extends State<BookingDetail> {
             for (final x in (b['extras'] as List).cast<Map>())
               _kv('${x['name']}${x['price_unit'] == 'per_booking' ? '' : ' × ${num_(x['quantity']).toStringAsFixed(0)}'}', money(x['line_total'])),
             if (num_(b['overstay_fee']) > 0) _kv('Overstay fee', money(b['overstay_fee'])),
-            _kv('Total paid', money(b['total_amount']), bold: true),
+            _kv(status == 'requested' ? 'Total (card on hold)' : 'Total paid', money(b['total_amount']), bold: true),
             if (isHost) ...[
               _kv('Platform commission (${(num_(b['commission_rate']) * 100).toStringAsFixed(0)}%)', '- ${money(b['commission_amount'])}'),
               _kv('Your earnings', money(b['host_earnings']), bold: true),

@@ -25,7 +25,9 @@ export class OffersService {
   private expiry(start: Date) {
     // 2 hours normally, 30 minutes when the stay starts within 3 hours
     const soon = start.getTime() - Date.now() < 3 * 3_600_000;
-    return new Date(Date.now() + (soon ? 30 : 120) * 60_000);
+    const base = Date.now() + (soon ? 30 : 120) * 60_000;
+    // An offer cannot outlive the stay it is for (bookings may start at most 10 minutes late).
+    return new Date(Math.min(base, start.getTime() + 10 * 60_000));
   }
 
   private async slotFree(listingId: string, start: Date, end: Date, buffer: number) {
@@ -112,7 +114,7 @@ export class OffersService {
         await this.db.query(`update offers set status = 'expired' where id = $1`, [offerId]);
         throw new ConflictException('Sorry, that time has just been booked by someone else');
       }
-      await this.db.query(`update offers set status = 'accepted', pay_by = now() + interval '15 minutes' where id = $1`, [offerId]);
+      await this.db.query(`update offers set status = 'accepted', pay_by = least(now() + interval '15 minutes', start_at + interval '10 minutes') where id = $1`, [offerId]);
       await this.notes.notify(o.driver_id, 'offer_accepted',
         role === 'host' ? 'Offer accepted!' : 'You accepted the counter-offer',
         `£${Number(o.amount).toFixed(2)} for ${o.title}. Pay within 15 minutes to confirm the booking.`, { ref });

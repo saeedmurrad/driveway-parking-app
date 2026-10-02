@@ -5,6 +5,9 @@ Full requirements: [Developer Specification (PDF)](docs/Driveway-Parking-App-Dev
 
 ## Live demo
 
+- **Demo guide (PDF, every flow with screenshots):** [docs/ParkSpace-Demo-Guide.pdf](docs/ParkSpace-Demo-Guide.pdf)
+- **Competitor analysis:** [docs/ParkSpace-UK-Competitor-Analysis.pdf](docs/ParkSpace-UK-Competitor-Analysis.pdf)
+
 - **App:** https://saeedmurrad.github.io/driveway-parking-app/ (use the Driver / Host / Admin demo buttons)
 - **API health:** https://parkspace-api.onrender.com/health (the free tier sleeps when idle, so the first load can take about a minute)
 

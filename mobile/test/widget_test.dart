@@ -6,6 +6,7 @@ void main() {
   test('money and date formatting', () {
     expect(money(12.5), '£12.50');
     expect(money('3.1'), '£3.10');
+    expect(money(-1.2), '-£1.20');
   });
 
   testWidgets('status chip shows a friendly label', (tester) async {

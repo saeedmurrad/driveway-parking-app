@@ -24,6 +24,13 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   int _tab = 0;
   Mode? _lastMode;
+  // Bumped whenever a tab is (re)selected so its data reloads (IndexedStack would otherwise keep stale lists).
+  final Map<int, int> _epoch = {};
+
+  void _select(int i) => setState(() {
+        _tab = i;
+        _epoch[i] = (_epoch[i] ?? 0) + 1;
+      });
 
   List<(IconData, IconData, String, Widget)> _tabs(Mode m) => switch (m) {
         Mode.driver => [
@@ -55,11 +62,12 @@ class _ShellState extends State<Shell> {
     if (_lastMode != s.mode) {
       _lastMode = s.mode;
       _tab = 0;
+      _epoch.clear();
     }
     final tabs = _tabs(s.mode);
     final wide = MediaQuery.sizeOf(context).width >= 900;
     final body = IndexedStack(index: _tab, children: [
-      for (final t in tabs) KeyedSubtree(key: ValueKey('${s.mode}-${t.$3}'), child: t.$4),
+      for (var i = 0; i < tabs.length; i++) KeyedSubtree(key: ValueKey('${s.mode}-${tabs[i].$3}-${_epoch[i] ?? 0}'), child: tabs[i].$4),
     ]);
 
     return Scaffold(
@@ -71,8 +79,10 @@ class _ShellState extends State<Shell> {
             decoration: BoxDecoration(color: brand, borderRadius: BorderRadius.circular(9)),
             child: const Center(child: Text('P', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20))),
           ),
-          const SizedBox(width: 10),
-          const Text('ParkSpace', style: TextStyle(fontWeight: FontWeight.w800)),
+          if (MediaQuery.sizeOf(context).width >= 520 || (!s.isHost && !s.isAdmin)) ...[
+            const SizedBox(width: 10),
+            const Text('ParkSpace', style: TextStyle(fontWeight: FontWeight.w800)),
+          ],
         ]),
         actions: [
           const NotificationBell(),
@@ -88,7 +98,7 @@ class _ShellState extends State<Shell> {
                 backgroundColor: Colors.white,
                 selectedIndex: _tab,
                 labelType: NavigationRailLabelType.all,
-                onDestinationSelected: (i) => setState(() => _tab = i),
+                onDestinationSelected: _select,
                 destinations: [for (final t in tabs) NavigationRailDestination(icon: Icon(t.$1), selectedIcon: Icon(t.$2), label: Text(t.$3))],
               ),
               const VerticalDivider(width: 1),
@@ -100,7 +110,7 @@ class _ShellState extends State<Shell> {
           ? null
           : NavigationBar(
               selectedIndex: _tab,
-              onDestinationSelected: (i) => setState(() => _tab = i),
+              onDestinationSelected: _select,
               destinations: [for (final t in tabs) NavigationDestination(icon: Icon(t.$1), selectedIcon: Icon(t.$2), label: t.$3)],
             ),
     );
