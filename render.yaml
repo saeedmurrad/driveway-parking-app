@@ -1,4 +1,5 @@
-# Render Blueprint: free-tier NestJS API. Connect this repo in Render > New > Blueprint.
+# Render Blueprint: free-tier NestJS API.
+# Render dashboard > New > Blueprint > pick this repo. Then set DATABASE_URL (the Supabase *session pooler* URI).
 services:
   - type: web
     name: parkspace-api
@@ -6,13 +7,18 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: free
+    autoDeploy: true
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        sync: false
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
+        sync: false            # secret: paste the Supabase connection string in the Render dashboard
+      - key: JWT_SECRET
+        generateValue: true    # Render generates a random secret
       - key: CORS_ORIGINS
         value: https://saeedmurrad.github.io
+      - key: DEMO_MODE
+        value: "true"          # no real email/SMS yet: verification codes are shown in the app
+      - key: STRIPE_SECRET_KEY
+        value: sk_test_placeholder
+      - key: STRIPE_WEBHOOK_SECRET
+        value: whsec_placeholder

@@ -17,17 +17,20 @@ prevents overlapping bookings at database level; the money ledger (`transactions
 `booking_events` are append-only, so totals are always `SUM`s; commission % lives in the
 `settings` table and is stored per booking.
 
-## One-time setup
+## Deploy (all free tiers)
 
-1. **Supabase**: create a project, open *SQL editor*, run `supabase/migrations/0001_init.sql`, then `supabase/seed.sql`.
-   Copy the pooled connection string (Project Settings > Database).
-2. **Render**: New > Blueprint > select this repo. Set `DATABASE_URL` (and Stripe keys when ready).
-   Note the service URL, e.g. `https://parkspace-api.onrender.com`.
-3. **GitHub**: Settings > Pages > Source = *GitHub Actions*. Settings > Secrets and variables > Actions > Variables:
-   add `API_URL` = your Render URL. Push to `main` (or run the *Deploy Flutter Web* workflow).
+1. **Supabase** (database): sign in with GitHub, create a project (region: London), then *Connect* > **Session pooler** URI.
+   Save it as `DATABASE_URL=...` in a git-ignored file called `.deploy.env`, then run `scripts/apply_db.sh`
+   (empty database only; it loads the schema and demo data using Docker).
+2. **Render** (API): sign in with GitHub, *New > Blueprint*, pick this repo, and paste the same value as the
+   `DATABASE_URL` secret. Note the service URL, e.g. `https://parkspace-api.onrender.com`.
+3. **GitHub Pages** (web app): Settings > Pages > Source = *GitHub Actions*; Settings > Secrets and variables >
+   Actions > Variables > add `API_URL` = the Render URL; re-run *Deploy Flutter Web*.
 4. Site: `https://saeedmurrad.github.io/driveway-parking-app/`
 
 > Render's free tier sleeps when idle: open `<API_URL>/health` a minute before a demo.
+> Uploaded photos live on the API's disk and are lost on redeploy (the demo photos are re-created automatically).
+> `DEMO_MODE=true` shows verification codes in the app because email/SMS are not wired up yet.
 
 ## Run locally
 
