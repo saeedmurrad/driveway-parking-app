@@ -14,6 +14,7 @@ export class DbService implements OnModuleDestroy {
         ? false
         : { rejectUnauthorized: false },
     max: 5,
+    connectionTimeoutMillis: 10_000, // fail fast instead of hanging requests
   });
 
   query(text: string, params: unknown[] = []): Promise<QueryResult> {
