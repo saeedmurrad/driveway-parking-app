@@ -1,12 +1,16 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Pool, PoolClient, QueryResult } from 'pg';
+import { describeDatabaseUrl, normalizeDatabaseUrl } from './database-url';
+
+const DB_URL = normalizeDatabaseUrl(process.env.DATABASE_URL);
+new Logger('Db').log(`Connecting with ${describeDatabaseUrl(DB_URL)}`);
 
 @Injectable()
 export class DbService implements OnModuleDestroy {
   private readonly pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: DB_URL,
     ssl:
-      process.env.DATABASE_SSL === 'false' || process.env.DATABASE_URL?.includes('localhost')
+      process.env.DATABASE_SSL === 'false' || DB_URL?.includes('localhost')
         ? false
         : { rejectUnauthorized: false },
     max: 5,
