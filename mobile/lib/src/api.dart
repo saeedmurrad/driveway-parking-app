@@ -22,8 +22,40 @@ String mediaUrl(String path) => path.startsWith('http') ? path : '$apiUrl$path';
 
 MediaType _mediaType(String m) => MediaType.parse(m);
 
+/// Message shown when the API cannot be reached (usually the free-tier host waking up).
+const unreachableMessage = 'The demo server is starting up. Please try again in a moment.';
+
 class Api {
   String? token;
+
+  bool _awake = false;
+
+  /// Waits for the API to answer /health. The demo API runs on a free tier that sleeps
+  /// when idle and takes up to a minute to wake, so callers can show progress via [onWaiting].
+  /// Returns true once the server answers, false if [timeout] passes first.
+  Future<bool> waitUntilAwake({Duration timeout = const Duration(seconds: 100), void Function(int secondsWaited)? onWaiting}) async {
+    if (_awake) return true;
+    final started = DateTime.now();
+    var attempt = 0;
+    while (DateTime.now().difference(started) < timeout) {
+      try {
+        final res = await http.get(Uri.parse('$apiUrl/health')).timeout(const Duration(seconds: 20));
+        if (res.statusCode < 500) {
+          _awake = true;
+          return true;
+        }
+      } catch (_) {}
+      attempt++;
+      onWaiting?.call(DateTime.now().difference(started).inSeconds);
+      await Future<void>.delayed(Duration(seconds: attempt < 3 ? 2 : 4));
+    }
+    return false;
+  }
+
+  /// Fire-and-forget wake-up call, used at app start so the server is ready by the time the user acts.
+  void warmUp() {
+    waitUntilAwake().ignore();
+  }
 
   Future<dynamic> _send(String method, String path, {Map<String, String>? query, Object? body}) async {
     final uri = Uri.parse('$apiUrl$path').replace(queryParameters: query);
@@ -41,7 +73,7 @@ class Api {
         _ => await http.get(uri, headers: headers),
       };
     } catch (_) {
-      throw ApiException('Cannot reach the server. Is the API running?', 0);
+      throw ApiException(unreachableMessage, 0);
     }
     final data = res.body.isEmpty ? null : jsonDecode(res.body);
     if (res.statusCode >= 400) {
@@ -66,7 +98,7 @@ class Api {
     } on ApiException {
       rethrow;
     } catch (_) {
-      throw ApiException('Cannot reach the server. Is the API running?', 0);
+      throw ApiException(unreachableMessage, 0);
     }
   }
 
@@ -83,7 +115,7 @@ class Api {
     } on ApiException {
       rethrow;
     } catch (_) {
-      throw ApiException('Upload failed. Is the API running?', 0);
+      throw ApiException('Upload failed. $unreachableMessage', 0);
     }
   }
   Future<dynamic> post(String path, [Object? body]) => _send('POST', path, body: body);

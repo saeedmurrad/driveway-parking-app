@@ -17,20 +17,35 @@ class AppState extends ChangeNotifier {
   Json? get vehicle => vehicles.where((v) => v['id'] == vehicleId).firstOrNull ?? vehicles.firstOrNull;
 
   Future<void> init() async {
+    api.warmUp();
     final prefs = await SharedPreferences.getInstance();
     final t = prefs.getString('token');
     if (t != null) {
       api.token = t;
       try {
-        await _adopt(await api.get('/auth/me'));
+        await _adopt(await _meWithRetry());
         if (isAdmin) mode = Mode.admin;
-      } catch (_) {
-        api.token = null;
-        await prefs.remove('token');
-      }
+      } on ApiException catch (e) {
+        // Only drop the session when the server rejected the token, not when it was unreachable.
+        if (e.status != 0) {
+          api.token = null;
+          await prefs.remove('token');
+        }
+      } catch (_) {}
     }
     ready = true;
     notifyListeners();
+  }
+
+  /// Fetches /auth/me, waiting for a sleeping server to wake before giving up.
+  Future<dynamic> _meWithRetry() async {
+    try {
+      return await api.get('/auth/me');
+    } on ApiException catch (e) {
+      if (e.status != 0) rethrow;
+      await api.waitUntilAwake();
+      return await api.get('/auth/me');
+    }
   }
 
   Future<void> _adopt(dynamic res) async {

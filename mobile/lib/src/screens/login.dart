@@ -21,11 +21,18 @@ class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _pass = TextEditingController();
   bool _register = false, _host = false, _busy = false, _terms = false;
+  String? _waiting;
 
   Future<void> _submit([String? email]) async {
     final s = context.read<AppState>();
     setState(() => _busy = true);
     try {
+      // The demo API sleeps when idle; wait for it rather than failing on the first tap.
+      final awake = await s.api.waitUntilAwake(onWaiting: (secs) {
+        if (mounted) setState(() => _waiting = 'Starting the demo server… ${secs}s. The first visit can take up to a minute.');
+      });
+      if (mounted) setState(() => _waiting = null);
+      if (!awake) throw ApiException(unreachableMessage, 0);
       if (email != null) {
         await s.login(email, 'demo1234');
       } else if (_register) {
@@ -116,6 +123,14 @@ class _LoginScreenState extends State<LoginScreen> {
                     padding: const EdgeInsets.all(16),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       const Text('Try a demo account', style: TextStyle(fontWeight: FontWeight.w700)),
+                      if (_waiting != null) ...[
+                        const SizedBox(height: 8),
+                        Row(children: [
+                          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(_waiting!, style: const TextStyle(fontSize: 12, color: Color(0xFF5B6478)))),
+                        ]),
+                      ],
                       const SizedBox(height: 10),
                       Wrap(spacing: 8, runSpacing: 8, children: [
                         _demo(Icons.directions_car, 'Driver', 'driver@demo.parkspace.test'),
