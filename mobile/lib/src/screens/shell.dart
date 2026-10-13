@@ -87,7 +87,8 @@ class _ShellState extends State<Shell> {
         actions: [
           const NotificationBell(),
           _ModeSwitcher(state: s),
-          const SizedBox(width: 12),
+          _AccountMenu(state: s),
+          const SizedBox(width: 6),
         ],
       ),
       body: Column(children: [
@@ -135,6 +136,46 @@ class _ModeSwitcher extends StatelessWidget {
       segments: [for (final m in modes) ButtonSegment(value: m, icon: Icon(icons[m], size: 16), label: Text(labels[m]!))],
       selected: {state.mode},
       onSelectionChanged: (v) => state.setMode(v.first),
+    );
+  }
+}
+
+/// Account menu in the app bar for every role (admins have no Profile tab, so sign-out must live here too).
+class _AccountMenu extends StatelessWidget {
+  const _AccountMenu({required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = '${state.user?['name'] ?? ''}';
+    return PopupMenuButton<String>(
+      tooltip: 'Account',
+      offset: const Offset(0, 48),
+      onSelected: (v) {
+        if (v == 'logout') state.logout();
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.black87)),
+            Text('${state.user?['email'] ?? ''}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          ]),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'logout',
+          child: Row(children: [Icon(Icons.logout, size: 18), SizedBox(width: 10), Text('Sign out')]),
+        ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: CircleAvatar(
+          radius: 16,
+          backgroundColor: brand,
+          child: Text(name.isEmpty ? '?' : name.substring(0, 1).toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+        ),
+      ),
     );
   }
 }
